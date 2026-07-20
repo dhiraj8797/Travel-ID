@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Travel ID — Boarding passes in one wallet</title>
+    <meta
+      name="description"
+      content="Travel ID keeps your bus, train, and flight boarding passes on your phone — with live status while you travel."
+    />
+    <meta property="og:title" content="Travel ID" />
+    <meta
+      property="og:description"
+      content="Your boarding-pass wallet for bus, train, and flight."
+    />
+    <meta property="og:image" content="assets/icon.png" />
+    <link rel="icon" href="assets/favicon.png" type="image/png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,700;1,9..40,400&family=Outfit:wght@600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="css/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <a href="#download">Get the app</a>
+    </header>
+
+    <main>
+      <section class="hero" aria-label="Travel ID">
+        <div class="hero__media" aria-hidden="true">
+          <img
+            src="assets/home-hero.jpg"
+            alt=""
+            width="1600"
+            height="1000"
+            fetchpriority="high"
+          />
+        </div>
+        <div class="hero__shade" aria-hidden="true"></div>
+        <div class="hero__content">
+          <div class="brand">
+            <img
+              class="brand__mark"
+              src="assets/travel-id-logo.png"
+              alt=""
+              width="56"
+              height="56"
+            />
+            <p class="brand__name">Travel <span>ID</span></p>
+          </div>
+          <h1 class="hero__headline">Boarding passes that stay with you</h1>
+          <p class="hero__lede">
+            Scan once. Carry bus, train, and flight tickets in one wallet on
+            your phone.
+          </p>
+          <div class="cta-row">
+            <a class="btn btn--primary" href="#download">Get Android app</a>
+            <a class="btn btn--ghost" href="#wallet">See how it works</a>
+          </div>
+        </div>
+      </section>
+
+      <section class="section modes" id="wallet">
+        <div class="section__inner">
+          <h2 class="section__title reveal">One wallet for every journey</h2>
+          <p class="section__copy reveal">
+            Add a ticket from a QR code, PDF, or photo. Travel ID builds a clean
+            boarding pass you can open offline at the gate or platform.
+          </p>
+          <div class="modes__grid">
+            <article class="mode reveal">
+              <div class="mode__visual">
+                <img src="assets/bus.jpg" alt="Bus journey" width="800" height="1000" loading="lazy" />
+              </div>
+              <h3 class="mode__label">Bus</h3>
+              <p class="mode__text">
+                Keep coach and seat handy for long routes across India.
+              </p>
+            </article>
+            <article class="mode reveal">
+              <div class="mode__visual mode__visual--vehicle">
+                <img
+                  src="assets/hero-train.png"
+                  alt="Train"
+                  width="640"
+                  height="400"
+                  loading="lazy"
+                />
+              </div>
+              <h3 class="mode__label">Train</h3>
+              <p class="mode__text">
+                PNR, coach, and berth in a pass you can open without signal.
+              </p>
+            </article>
+            <article class="mode reveal">
+              <div class="mode__visual">
+                <img
+                  src="assets/flight-pass-hero.jpg"
+                  alt="Airport departure"
+                  width="800"
+                  height="1000"
+                  loading="lazy"
+                />
+              </div>
+              <h3 class="mode__label">Flight</h3>
+              <p class="mode__text">
+                Boarding barcodes ready when you reach security.
+              </p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="section live" id="live">
+        <div class="section__inner live__frame">
+          <div class="live__photo reveal">
+            <img
+              src="assets/train.jpg"
+              alt="Train on the tracks"
+              width="1200"
+              height="800"
+              loading="lazy"
+            />
+          </div>
+          <div class="live__copy reveal">
+            <h2 class="section__title">Live while you travel</h2>
+            <p class="section__copy">
+              See running status on rail journeys and gate-side details for
+              flights — so you know what’s next without leaving the wallet.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section download" id="download">
+        <div class="section__inner reveal">
+          <h2 class="section__title">Get Travel ID</h2>
+          <p class="section__copy">
+            Android APK for Travel ID. Install, scan a ticket, and you’re ready
+            for the next departure.
+          </p>
+          <div class="cta-row">
+            <a
+              class="btn btn--primary"
+              href="downloads/TravelID-release.apk"
+              download
+            >
+              Download APK
+            </a>
+            <a class="btn btn--ghost" href="privacy.html">Privacy</a>
+          </div>
+          <p class="download__note">
+            Package <code>com.travelid.app</code> · Sign in with Google or email
+          </p>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <div class="footer__inner">
+        <div class="footer__brand">
+          <img src="assets/travel-id-logo.png" alt="" width="28" height="28" />
+          Travel <span>ID</span>
+        </div>
+        <nav class="footer__links" aria-label="Legal">
+          <a href="privacy.html">Privacy</a>
+          <a href="terms.html">Terms</a>
+          <a href="data-privacy.html">Data &amp; privacy</a>
+          <a href="#download">Download</a>
+        </nav>
+        <p class="footer__copy">
+          © 2026 Travel ID. A boarding-pass wallet — not a ticket issuer.
+        </p>
+      </div>
+    </footer>
+
+    <script src="js/main.js"></script>
+  </body>
+</html>

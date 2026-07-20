@@ -1,25 +1,90 @@
 {
   "expo": {
-    "name": "Wallet",
-    "slug": "Wallet",
+    "name": "Travel ID",
+    "slug": "travel-id",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
+    "scheme": "travelid",
+    "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.travelid.app",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Scan ticket QR codes and barcodes, or photograph tickets for Travel ID.",
+        "NSPhotoLibraryUsageDescription": "Choose ticket PDFs or photos from your library.",
+        "NSLocationWhenInUseUsageDescription": "Travel ID uses GPS to show your live train speed while you travel."
+      }
     },
     "android": {
+      "package": "com.travelid.app",
+      "versionCode": 99,
+      "usesCleartextTraffic": true,
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/android-icon-foreground.png",
-        "backgroundImage": "./assets/android-icon-background.png",
-        "monochromeImage": "./assets/android-icon-monochrome.png"
+        "backgroundColor": "#FF6A00",
+        "foregroundImage": "./assets/icon.png"
       },
+      "permissions": [
+        "CAMERA",
+        "READ_EXTERNAL_STORAGE",
+        "READ_MEDIA_IMAGES",
+        "POST_NOTIFICATIONS",
+        "VIBRATE",
+        "SCHEDULE_EXACT_ALARM",
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION"
+      ],
       "predictiveBackGestureEnabled": false
     },
     "web": {
-      "favicon": "./assets/favicon.png"
+      "favicon": "./assets/favicon.png",
+      "bundler": "metro"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-font",
+      [
+        "expo-notifications",
+        {
+          "sounds": [
+            "./assets/sounds/arrival_alarm.wav"
+          ],
+          "defaultChannel": "arrival-alerts"
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow Travel ID to scan ticket QR codes and barcodes."
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Allow Travel ID to use GPS for live train speed while you travel."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow Travel ID to upload ticket photos.",
+          "cameraPermission": "Allow Travel ID to photograph tickets."
+        }
+      ],
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#06101F",
+          "image": "./assets/splash-icon.png"
+        }
+      ],
+      "@react-native-google-signin/google-signin"
+    ],
+    "extra": {
+      "router": {},
+      "apiProxyUrl": "https://essential-enjoy-upgrading-weekly.trycloudflare.com",
+      "googleWebClientId": "635583361817-to14vbtpikh6tmpfsoco5o6eeaojf55m.apps.googleusercontent.com"
     }
   }
 }

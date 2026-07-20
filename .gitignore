@@ -31,7 +31,10 @@ yarn-error.*
 *.pem
 
 # local env files
+.env
 .env*.local
+server/.env
+server/data/
 
 # typescript
 *.tsbuildinfo
@@ -39,3 +42,6 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# proxy logs
+server/*.log

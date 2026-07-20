@@ -1,0 +1,58 @@
+export const colors = {
+  // Compose sample dark theme
+  background: '#06101F',
+  panel: 'rgba(12, 25, 47, 0.90)',
+  panelSolid: '#0C192F',
+  orange: '#FF6800',
+  blue: '#3476FF',
+  purple: '#984DFF',
+  green: '#1FC77A',
+  muted: '#AEBBD0',
+  white: '#FFFFFF',
+  black: '#000000',
+  ink: '#FFFFFF',
+  navy: '#0D1730',
+  cardLight: '#FDFDFE',
+  fieldMuted: '#6C7482',
+  fieldInk: '#0B1530',
+  line: 'rgba(255,255,255,0.14)',
+  lineDark: '#D7DCE4',
+
+  // aliases used across app
+  bg: '#06101F',
+  bgElevated: '#0C192F',
+  surface: '#111C31',
+  surfaceSoft: '#17264C',
+  faint: '#7A879C',
+  danger: '#E85D5D',
+  success: '#1FC77A',
+  rail: '#3476FF',
+  railDeep: '#1E4FD6',
+  bus: '#FF6800',
+  busDeep: '#E55D00',
+  flight: '#984DFF',
+  orangeSoft: 'rgba(255,104,0,0.12)',
+  blueSoft: 'rgba(52,118,255,0.12)',
+  purpleSoft: 'rgba(152,77,255,0.12)',
+  greenSoft: 'rgba(31,199,122,0.12)',
+  navySoft: '#243047',
+  bgWarm: '#06101F',
+  card: '#0C192F',
+};
+
+export const spacing = {
+  xs: 6,
+  sm: 10,
+  md: 16,
+  lg: 24,
+  xl: 32,
+  xxl: 48,
+};
+
+export const radii = {
+  sm: 10,
+  md: 16,
+  lg: 22,
+  xl: 28,
+  pill: 999,
+};
