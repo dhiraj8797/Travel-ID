@@ -25,7 +25,7 @@ import { useTickets } from '../../src/context/TicketContext';
 import { isPastPass, isUpcomingPass } from '../../src/utils/passTime';
 import { colors, radii, spacing } from '../../src/theme';
 
-const logo = require('../../assets/travel-id-logo.png');
+const logo = require('../../assets/travel-id-logo.jpg');
 const nightBg = require('../../assets/scenes/passes-settings-bg.jpg');
 const flightArt = require('../../assets/vehicles/hero-flight.png');
 const trainArt = require('../../assets/heroes/train.jpg');
@@ -74,7 +74,14 @@ export default function ProfileScreen() {
       setDobMonth(m);
       setDobDay(d);
     }
-  }, [user?.id]);
+  }, [
+    user?.id,
+    user?.firstName,
+    user?.lastName,
+    user?.dateOfBirth,
+    user?.fullName,
+    user?.name,
+  ]);
 
   const dateOfBirthIso = useMemo(() => {
     const d = dobDay.replace(/\D/g, '').padStart(2, '0').slice(-2);
@@ -129,6 +136,8 @@ export default function ProfileScreen() {
     const flights = completed.filter((t) => t.kind === 'flight').length;
     const trains = completed.filter((t) => t.kind === 'rail').length;
     const buses = completed.filter((t) => t.kind === 'bus').length;
+    const hotels = completed.filter((t) => t.kind === 'hotel').length;
+    const metros = completed.filter((t) => t.kind === 'metro').length;
     const cities = new Set(
       tickets.flatMap((t) => [t.fromCode || t.from, t.toCode || t.to].filter(Boolean))
     ).size;
@@ -140,6 +149,8 @@ export default function ProfileScreen() {
       flights,
       trains,
       buses,
+      hotels,
+      metros,
     };
   }, [tickets]);
 
@@ -416,6 +427,18 @@ export default function ProfileScreen() {
                 icon="bus"
                 image={busArt}
               />
+              <CollectionCell
+                title="Hotels"
+                count={stats.hotels}
+                accent="#0F766E"
+                icon="office-building"
+              />
+              <CollectionCell
+                title="Metro"
+                count={stats.metros}
+                accent="#9B2D8E"
+                icon="subway-variant"
+              />
             </View>
           </View>
 
@@ -485,26 +508,38 @@ function CollectionCell({
   count: number;
   accent: string;
   icon: React.ComponentProps<typeof MaterialCommunityIcons>['name'];
-  image: number;
+  image?: number;
 }) {
-  return (
-    <ImageBackground
-      source={image}
-      style={[styles.collectionCell, { borderColor: `${accent}88` }]}
-      imageStyle={styles.collectionImg}
-      resizeMode="cover"
+  const body = (
+    <LinearGradient
+      colors={['rgba(4,10,28,0.35)', 'rgba(4,10,28,0.82)']}
+      style={styles.collectionScrim}
     >
-      <LinearGradient
-        colors={['rgba(4,10,28,0.35)', 'rgba(4,10,28,0.82)']}
-        style={styles.collectionScrim}
+      <View style={[styles.collectionIcon, { backgroundColor: `${accent}55` }]}>
+        <MaterialCommunityIcons name={icon} size={16} color="#fff" />
+      </View>
+      <Text style={styles.collectionCount}>{pad2(count)}</Text>
+      <Text style={styles.collectionName}>{title}</Text>
+    </LinearGradient>
+  );
+
+  if (image != null) {
+    return (
+      <ImageBackground
+        source={image}
+        style={[styles.collectionCell, { borderColor: `${accent}88` }]}
+        imageStyle={styles.collectionImg}
+        resizeMode="cover"
       >
-        <View style={[styles.collectionIcon, { backgroundColor: `${accent}55` }]}>
-          <MaterialCommunityIcons name={icon} size={16} color="#fff" />
-        </View>
-        <Text style={styles.collectionCount}>{pad2(count)}</Text>
-        <Text style={styles.collectionName}>{title}</Text>
-      </LinearGradient>
-    </ImageBackground>
+        {body}
+      </ImageBackground>
+    );
+  }
+
+  return (
+    <View style={[styles.collectionCell, { borderColor: `${accent}88`, backgroundColor: accent }]}>
+      {body}
+    </View>
   );
 }
 
@@ -792,10 +827,12 @@ const styles = StyleSheet.create({
   },
   collectionRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 10,
   },
   collectionCell: {
-    flex: 1,
+    width: '47%',
+    flexGrow: 1,
     height: 120,
     borderRadius: 16,
     borderWidth: 1,

@@ -183,56 +183,143 @@ export function mergePassengerLists(
   return merged;
 }
 
+const CONFIRM_TKT_BODY = JSON.stringify({
+  proPlanName: 'CP7',
+  emailId: '',
+  tempToken: '',
+});
+
+/** Web client headers — needed for charted / completed (past) PNRs. */
+const CT_WEB_HEADERS: Record<string, string> = {
+  Accept: '*/*',
+  'Accept-Language': 'en-US,en;q=0.9',
+  ApiKey: 'ct-web!2$',
+  'CT-Token': '',
+  'CT-Userkey': '',
+  'Cache-Control': 'no-cache',
+  ClientId: 'ct-web',
+  'Content-Type': 'application/json',
+  DeviceId: 'd7369386-46dc-4e87-830c-f7653b2b8551',
+  Origin: 'https://www.confirmtkt.com',
+  Pragma: 'no-cache',
+  Referer: 'https://www.confirmtkt.com/',
+  'User-Agent':
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36',
+};
+
+const CT_MWEB_HEADERS: Record<string, string> = {
+  'Content-Type': 'application/json',
+  Accept: 'application/json',
+  'User-Agent':
+    'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Mobile Safari/537.36',
+  Origin: 'https://www.confirmtkt.com',
+  Referer: 'https://www.confirmtkt.com/',
+};
+
+type ConfirmTktMode = {
+  querysource: 'ct-web' | 'ct-mweb';
+  livePnr: boolean;
+  headers: Record<string, string>;
+};
+
+/**
+ * Past / chart-prepared PNRs often fail with livePnr=true + ct-mweb.
+ * Prefer ct-web + livePnr=false first (same as ConfirmTkt website).
+ */
+const CONFIRM_TKT_MODES: ConfirmTktMode[] = [
+  { querysource: 'ct-web', livePnr: false, headers: CT_WEB_HEADERS },
+  { querysource: 'ct-web', livePnr: true, headers: CT_WEB_HEADERS },
+  { querysource: 'ct-mweb', livePnr: false, headers: CT_MWEB_HEADERS },
+  { querysource: 'ct-mweb', livePnr: true, headers: CT_MWEB_HEADERS },
+];
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function hasUsablePnrPayload(p: Record<string, unknown>): boolean {
+  const trainNo = String(p.trainNo || p.TrainNo || '').trim();
+  const pnrField = String(p.pnr || p.Pnr || '').trim();
+  return Boolean(trainNo || (pnrField.length === 10));
+}
+
+function friendlyPnrError(raw: string): Error {
+  const msg = String(raw || 'PNR lookup failed').trim();
+  if (/invalid/i.test(msg)) {
+    return new Error(
+      'PNR not found. IRCTC removes completed journey PNRs after a few days — upload the ticket PDF or photo instead, or try again closer to travel.'
+    );
+  }
+  if (/flush|expired|not available|journey.*(over|completed)|chart/i.test(msg)) {
+    return new Error(
+      'This PNR is no longer available from IRCTC (common after the journey). Upload your ticket PDF or photo instead.'
+    );
+  }
+  return new Error(msg);
+}
+
+async function postConfirmTktOnce(
+  pnr: string,
+  mode: ConfirmTktMode
+): Promise<Record<string, unknown>> {
+  const url = `${CONFIRM_TKT}/${pnr}?querysource=${mode.querysource}&locale=en&getHighChanceText=true&livePnr=${mode.livePnr}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: mode.headers,
+    body: CONFIRM_TKT_BODY,
+  });
+  const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+  const data = json?.data as Record<string, unknown> | undefined;
+  const p = data?.pnrResponse as Record<string, unknown> | undefined;
+
+  if (!res.ok || !p) {
+    const nested = p?.error;
+    const errObj = json?.error as { message?: string } | undefined;
+    throw friendlyPnrError(
+      String(
+        nested ||
+          errObj?.message ||
+          json?.message ||
+          `PNR lookup failed (${res.status})`
+      )
+    );
+  }
+
+  if (p.error && Number(p.errorCode || 0) !== 0) {
+    throw friendlyPnrError(String(p.error));
+  }
+
+  if (!hasUsablePnrPayload(p)) {
+    throw friendlyPnrError(
+      String(p.error || 'Empty PNR response — try again or upload your ticket PDF')
+    );
+  }
+
+  return p;
+}
+
 async function postConfirmTkt(pnr: string): Promise<Record<string, unknown>> {
-  const url = `${CONFIRM_TKT}/${pnr}?querysource=ct-mweb&locale=en&getHighChanceText=true&livePnr=true`;
   let lastError: Error | undefined;
 
-  // ConfirmTkt often returns Invalid PNR on the first hit — retry.
-  for (let attempt = 0; attempt < 4; attempt++) {
-    try {
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'application/json',
-          'User-Agent':
-            'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Mobile Safari/537.36',
-          Origin: 'https://www.confirmtkt.com',
-          Referer: 'https://www.confirmtkt.com/',
-        },
-        body: JSON.stringify({
-          proPlanName: 'CP7',
-          emailId: '',
-          tempToken: '',
-        }),
-      });
-      const json = await res.json().catch(() => ({}));
-      const p = json?.data?.pnrResponse as Record<string, unknown> | undefined;
-
-      if (!res.ok || !p) {
-        const msg =
-          json?.data?.pnrResponse?.error ||
-          json?.error?.message ||
-          json?.message ||
-          `PNR lookup failed (${res.status})`;
-        lastError = new Error(String(msg));
-        continue;
+  // ConfirmTkt often returns Invalid PNR on the first hit — retry, then try
+  // alternate livePnr / client modes (past journeys need livePnr=false).
+  for (let modeIdx = 0; modeIdx < CONFIRM_TKT_MODES.length; modeIdx++) {
+    const mode = CONFIRM_TKT_MODES[modeIdx];
+    const attempts = modeIdx === 0 ? 3 : 2;
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      try {
+        if (attempt > 0) await sleep(350 * attempt);
+        return await postConfirmTktOnce(pnr, mode);
+      } catch (e) {
+        lastError =
+          e instanceof Error ? e : new Error('Network error fetching PNR');
+        const msg = lastError.message;
+        const retryable =
+          /invalid|empty|network|failed \(\d+\)|timed out|timeout|not found/i.test(
+            msg
+          );
+        if (!retryable) throw lastError;
       }
-
-      if (p.error && Number(p.errorCode || 0) !== 0) {
-        lastError = new Error(String(p.error));
-        // Retry transient invalid responses
-        if (/invalid/i.test(String(p.error)) && attempt < 3) continue;
-        throw lastError;
-      }
-
-      return p;
-    } catch (e) {
-      lastError =
-        e instanceof Error
-          ? e
-          : new Error('Network error fetching PNR');
-      if (attempt < 3) continue;
     }
   }
 
@@ -246,6 +333,13 @@ async function postConfirmTkt(pnr: string): Promise<Record<string, unknown>> {
 export async function fetchPnrDetails(pnrInput: string): Promise<PnrLookupResult> {
   const pnr = normalizePnr(pnrInput);
   const p = await postConfirmTkt(pnr);
+
+  const trainNumber = String(p.trainNo || p.TrainNo || '').trim();
+  if (!trainNumber) {
+    throw friendlyPnrError(
+      String(p.error || 'Invalid PNR')
+    );
+  }
 
   const passengersRaw = Array.isArray(p.passengerStatus)
     ? (p.passengerStatus as Array<Record<string, unknown>>)
@@ -318,7 +412,7 @@ export async function fetchPnrDetails(pnrInput: string): Promise<PnrLookupResult
 
   return {
     pnr,
-    trainNumber: String(p.trainNo || p.TrainNo || ''),
+    trainNumber,
     trainName: p.trainName
       ? String(p.trainName)
       : p.TrainName

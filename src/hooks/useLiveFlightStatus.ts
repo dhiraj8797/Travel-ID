@@ -6,6 +6,7 @@ import {
   isCiriumConfigured,
 } from '../services/cirium';
 import { notifyFlightChanges } from '../services/flightAlerts';
+import { isPastPass, isLiveWindowOver } from '../utils/passTime';
 
 type Options = {
   ticket: Ticket;
@@ -71,6 +72,12 @@ export function useLiveFlightStatus({
     async (opts?: { silent?: boolean; bypassCache?: boolean }) => {
       const t = ticketRef.current;
       if (!enabled || t.kind !== 'flight') return;
+      if (isPastPass(t) || isLiveWindowOver(t) || t.journeyCompleted) {
+        setStatus(null);
+        setError(null);
+        setLoading(false);
+        return;
+      }
       if (!configured) {
         setError('Live updates need the API proxy running');
         return;
@@ -193,11 +200,25 @@ export function useLiveFlightStatus({
   // One initial fetch + slow poll — do not depend on `refresh` identity churn.
   useEffect(() => {
     if (!enabled || ticket.kind !== 'flight' || !configured) return;
+    if (isPastPass(ticket) || ticket.journeyCompleted || isLiveWindowOver(ticket)) {
+      setStatus(null);
+      setError(null);
+      setLoading(false);
+      return;
+    }
     void refresh({ silent: false });
     const id = setInterval(() => void refresh({ silent: true }), pollMs);
     return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only rebind on ticket identity / poll
-  }, [configured, enabled, pollMs, ticket.kind, ticket.id]);
+  }, [
+    configured,
+    enabled,
+    pollMs,
+    ticket.kind,
+    ticket.id,
+    ticket.journeyCompleted,
+    ticket.departureDate,
+  ]);
 
   return {
     configured,

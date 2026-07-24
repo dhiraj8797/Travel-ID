@@ -1,5 +1,10 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ticket } from '../types/ticket';
+import {
+  decryptString,
+  encryptString,
+  isEncryptedEnvelope,
+} from './secureVault';
 
 /** Legacy device-global key (pre account-scoped wallets). */
 const LEGACY_KEY = 'wallet.tickets.v2';
@@ -11,19 +16,41 @@ export function ticketsStorageKey(userId: string | null | undefined): string | n
   return `wallet.tickets.v2.u:${id}`;
 }
 
-async function readList(key: string): Promise<Ticket[]> {
-  const raw = await AsyncStorage.getItem(key);
+/** Drop bulky OCR dumps before disk — structured fields are enough for the UI. */
+function sanitizeForPersist(tickets: Ticket[]): Ticket[] {
+  return tickets.map((t) => {
+    if (!t.rawText) return t;
+    const { rawText: _drop, ...rest } = t;
+    return rest as Ticket;
+  });
+}
+
+async function parseTicketList(raw: string | null): Promise<Ticket[]> {
   if (!raw) return [];
   try {
-    const parsed = JSON.parse(raw) as Ticket[];
+    const json = isEncryptedEnvelope(raw) ? await decryptString(raw) : raw;
+    const parsed = JSON.parse(json) as Ticket[];
     return Array.isArray(parsed) ? parsed : [];
   } catch {
     return [];
   }
 }
 
+async function readList(key: string): Promise<Ticket[]> {
+  return parseTicketList(await AsyncStorage.getItem(key));
+}
+
 async function writeList(key: string, tickets: Ticket[]): Promise<void> {
-  await AsyncStorage.setItem(key, JSON.stringify(tickets));
+  const payload = JSON.stringify(sanitizeForPersist(tickets));
+  try {
+    const sealed = await encryptString(payload);
+    await AsyncStorage.setItem(key, sealed);
+  } catch {
+    // SecureStore / crypto unavailable — refuse plaintext write of PII.
+    throw new Error(
+      'Could not encrypt your wallet on this device. Unlock the phone and try again.'
+    );
+  }
 }
 
 /**
@@ -38,12 +65,16 @@ export async function loadTicketsForUser(
 
   const raw = await AsyncStorage.getItem(key);
   if (raw != null) {
-    try {
-      const parsed = JSON.parse(raw) as Ticket[];
-      return Array.isArray(parsed) ? parsed : [];
-    } catch {
-      return [];
+    const tickets = await parseTicketList(raw);
+    // Re-seal legacy plaintext on next successful load.
+    if (tickets.length && !isEncryptedEnvelope(raw)) {
+      try {
+        await writeList(key, tickets);
+      } catch {
+        /* keep readable until encryption works */
+      }
     }
+    return tickets;
   }
 
   const legacy = await readList(LEGACY_KEY);

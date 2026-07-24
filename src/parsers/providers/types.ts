@@ -1,4 +1,5 @@
 import { ParsedTicketDraft, TicketType } from '../../types/ticket';
+import { looksLikeHotel } from '../hotelDetect';
 
 export interface TicketParser {
   readonly name: string;
@@ -8,6 +9,11 @@ export interface TicketParser {
 
 export function detectTicketType(text: string): TicketType {
   const value = text.toLowerCase();
+
+  // Hotel first — OTA PDFs often contain 10-digit IDs that look like rail PNRs
+  if (looksLikeHotel(text)) {
+    return 'HOTEL';
+  }
 
   // IATA BCBP boarding barcodes (IndiGo etc.) — check before rail heuristics
   if (

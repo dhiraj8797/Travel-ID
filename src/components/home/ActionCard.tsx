@@ -3,13 +3,13 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { colors, radii } from '../../theme';
 
-type Tone = 'orange' | 'blue' | 'green';
+type Tone = 'orange' | 'blue' | 'green' | 'metro';
 
 type Props = {
   title: string;
   description: string;
   tone: Tone;
-  icon: 'pdf' | 'scan' | 'wallet' | 'cloud' | 'photo' | 'pnr';
+  icon: 'pdf' | 'scan' | 'wallet' | 'cloud' | 'photo' | 'pnr' | 'metro';
   onPress: () => void;
   disabled?: boolean;
 };
@@ -18,6 +18,7 @@ const toneColor: Record<Tone, string> = {
   orange: colors.orange,
   blue: colors.blue,
   green: colors.green,
+  metro: colors.metro,
 };
 
 export function ActionCard({ title, description, tone, icon, onPress, disabled }: Props) {
@@ -40,6 +41,7 @@ export function ActionCard({ title, description, tone, icon, onPress, disabled }
         {icon === 'cloud' && <Ionicons name="cloud-upload" size={32} color={color} />}
         {icon === 'photo' && <Ionicons name="camera" size={32} color={color} />}
         {icon === 'pnr' && <MaterialCommunityIcons name="ticket-confirmation" size={32} color={color} />}
+        {icon === 'metro' && <MaterialCommunityIcons name="subway-variant" size={32} color={color} />}
       </View>
       <Text style={styles.title}>{title}</Text>
       <Text style={styles.body}>{description}</Text>

@@ -28,11 +28,11 @@ export function StaticSceneBackground({ dim = 0.42 }: Props) {
 
 const styles = StyleSheet.create({
   image: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     width: '100%',
     height: '100%',
   },
   dim: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
   },
 });

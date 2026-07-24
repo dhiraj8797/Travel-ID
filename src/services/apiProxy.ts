@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
+import { builtinProxyToken, builtinProxyUrl } from './proxySecrets';
 
 type Extra = {
   apiProxyUrl?: string;
@@ -8,21 +9,23 @@ type Extra = {
 
 const OVERRIDE_KEY = 'travelid.apiProxyUrl';
 /**
- * Built-in default proxy URL.
- * Prefer a public HTTPS tunnel (localtunnel / cloudflared) so the APK works
- * over mobile data — private LAN IPs are not routable from cellular.
- * Keep `npm run proxy` + the tunnel process running on the PC.
+ * Built-in cloud proxy (keys stay on the server).
  */
-const BUILTIN_PROXY_URL =
-  'https://essential-enjoy-upgrading-weekly.trycloudflare.com';
-/** USB/LAN fallback when phone shares the PC subnet (e.g. USB tethering). */
-const LAN_PROXY_URL = 'http://10.221.85.43:8787';
-/** USB debug only — often broken on modern Android; try last with short timeout. */
-const ADB_REVERSE_URL = 'http://127.0.0.1:8787';
+const BUILTIN_PROXY_URL = builtinProxyUrl();
+/** Dev-only LAN / USB fallbacks — not shown in Settings. */
+const LAN_PROXY_URLS = __DEV__
+  ? ['http://10.221.85.168:8787', 'http://10.124.37.154:8787']
+  : [];
+/** USB debug — `adb reverse tcp:8787 tcp:8787` (short timeout). */
+const ADB_REVERSE_URL = __DEV__ ? 'http://127.0.0.1:8787' : '';
 
-const PER_CANDIDATE_MS = 20_000;
+const PER_CANDIDATE_MS = 12_000;
+/** After all candidates fail, pause retries to avoid alert spam. */
+const NETWORK_DOWN_COOLDOWN_MS = 45_000;
 
 let overrideUrl: string | null | undefined;
+let stickyProxy: string | null = null;
+let networkDownUntil = 0;
 
 function extra(): Extra {
   return (Constants.expoConfig?.extra as Extra | undefined) || {};
@@ -36,19 +39,30 @@ function isPrivateLanHttp(url: string): boolean {
   return /^http:\/\/(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(url);
 }
 
+/** Hosts that are known dead — never use again. */
 function isDeadKnownHost(url: string): boolean {
   return (
-    /10\.124\.37\.154/.test(url) ||
+    /10\.221\.85\.158/.test(url) ||
     /10\.221\.85\.189/.test(url) ||
-    /127\.0\.0\.1:8787/.test(url) ||
-    /localhost:8787/.test(url) ||
-    // Saved LAN overrides fail on mobile data — clear them so HTTPS tunnel is used.
-    isPrivateLanHttp(url)
+    /192\.168\.0\.109/.test(url) ||
+    /patrick-birmingham-eds-programming\.trycloudflare\.com/.test(url) ||
+    /pen-logs-functionality-excellent\.trycloudflare\.com/.test(url) ||
+    /essential-enjoy-upgrading-weekly\.trycloudflare\.com/.test(url)
   );
 }
 
-/** Load a saved LAN proxy URL override (call once at app start). */
+/** Load a saved proxy URL override (call once at app start). */
 export async function loadApiProxyOverride(): Promise<void> {
+  if (!__DEV__) {
+    // Release builds always use the baked-in production proxy.
+    overrideUrl = null;
+    try {
+      await AsyncStorage.removeItem(OVERRIDE_KEY);
+    } catch {
+      /* ignore */
+    }
+    return;
+  }
   try {
     const raw = await AsyncStorage.getItem(OVERRIDE_KEY);
     if (raw && raw.trim()) {
@@ -68,14 +82,21 @@ export async function loadApiProxyOverride(): Promise<void> {
 }
 
 export async function setApiProxyUrlOverride(url: string): Promise<void> {
+  if (!__DEV__) {
+    throw new Error('Proxy override is only available in development builds');
+  }
   const next = normalize(url);
   overrideUrl = next || null;
+  stickyProxy = null;
+  networkDownUntil = 0;
   if (next) await AsyncStorage.setItem(OVERRIDE_KEY, next);
   else await AsyncStorage.removeItem(OVERRIDE_KEY);
 }
 
 export async function clearApiProxyUrlOverride(): Promise<void> {
   overrideUrl = null;
+  stickyProxy = null;
+  networkDownUntil = 0;
   await AsyncStorage.removeItem(OVERRIDE_KEY);
 }
 
@@ -96,22 +117,24 @@ export function getApiProxyUrlDefault(): string {
 }
 
 /**
- * Ordered proxy bases: saved override → app config / builtin LAN → USB reverse last.
+ * Ordered proxy bases: override → HTTPS tunnel → LAN → USB reverse.
  */
 export function getApiProxyCandidates(): string[] {
   const primary = getApiProxyUrl();
   const baked = getApiProxyUrlDefault();
-  const list = [primary, baked, BUILTIN_PROXY_URL].filter(Boolean);
+  const list = [
+    primary,
+    baked,
+    BUILTIN_PROXY_URL,
+    ...LAN_PROXY_URLS,
+    ADB_REVERSE_URL,
+  ].filter(Boolean);
+
   return [
     ...new Set(
       list
         .map(normalize)
-        .filter(
-          (u) =>
-            u &&
-            !/127\.0\.0\.1|localhost/.test(u) &&
-            !isPrivateLanHttp(u)
-        )
+        .filter((u) => u && !isDeadKnownHost(u))
     ),
   ];
 }
@@ -123,7 +146,7 @@ export function isApiProxyConfigured(): boolean {
 export function getApiProxyToken(): string | undefined {
   const fromEnv = (process.env.EXPO_PUBLIC_API_PROXY_TOKEN || '').trim();
   const fromExtra = (extra().apiProxyToken || '').trim();
-  const t = fromEnv || fromExtra;
+  const t = fromEnv || fromExtra || builtinProxyToken();
   return t || undefined;
 }
 
@@ -148,9 +171,7 @@ export function formatProxyNetworkError(err: unknown, proxyUrl: string): string 
     lower.includes('aborted')
   ) {
     return (
-      `Cannot reach live proxy (${proxyUrl || 'none'}). ` +
-      `Phone + PC on same Wi‑Fi, run npm run proxy on PC, ` +
-      `then set the PC IP in Settings → Live data proxy.`
+      `Cannot reach live data. Check your internet connection and try again.`
     );
   }
   return msg || 'Network error talking to the API proxy';
@@ -185,18 +206,27 @@ async function fetchWithTimeout(
   }
 }
 
-let stickyProxy: string | null = null;
-
 /**
- * GET against the Travel ID proxy with short per-host timeouts and failover.
+ * GET/POST against the Travel ID proxy with short per-host timeouts and failover.
  */
 export async function proxyFetch(
   pathWithQuery: string,
-  init?: RequestInit
+  init?: RequestInit,
+  options?: { timeoutMs?: number }
 ): Promise<Response> {
   const path = pathWithQuery.startsWith('/')
     ? pathWithQuery
     : `/${pathWithQuery}`;
+
+  if (Date.now() < networkDownUntil) {
+    throw new Error(
+      formatProxyNetworkError(
+        new Error('Proxy cooling down after network failure'),
+        stickyProxy || getApiProxyUrl()
+      )
+    );
+  }
+
   const candidates = stickyProxy
     ? [stickyProxy, ...getApiProxyCandidates().filter((u) => u !== stickyProxy)]
     : getApiProxyCandidates();
@@ -209,10 +239,11 @@ export async function proxyFetch(
 
   let lastErr: unknown;
   for (const base of candidates) {
-    const timeout =
+    const defaultTimeout =
       base.includes('127.0.0.1') || base.includes('localhost')
-        ? 1500
+        ? 2000
         : PER_CANDIDATE_MS;
+    const timeout = options?.timeoutMs ?? defaultTimeout;
     try {
       if (__DEV__) {
         // eslint-disable-next-line no-console
@@ -226,7 +257,14 @@ export async function proxyFetch(
         },
         timeout
       );
+      // Don't stick to a dead tunnel that returned HTML/502
+      if (res.status >= 502 && res.status <= 504) {
+        lastErr = new Error(`Proxy upstream ${res.status}`);
+        if (stickyProxy === base) stickyProxy = null;
+        continue;
+      }
       stickyProxy = base;
+      networkDownUntil = 0;
       return res;
     } catch (e) {
       lastErr = e;
@@ -235,6 +273,7 @@ export async function proxyFetch(
     }
   }
 
+  networkDownUntil = Date.now() + NETWORK_DOWN_COOLDOWN_MS;
   throw new Error(
     formatProxyNetworkError(lastErr, candidates[0] || getApiProxyUrl())
   );

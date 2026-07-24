@@ -4,7 +4,12 @@ import { isCreatedTravelId, normalizeTravelId } from './travelId';
 import { AuthSession } from './types';
 
 const STORAGE_KEY = 'travelid.google.session.v1';
+const TOKEN_KEY = 'travelid.google.token.v1';
 const LEGACY_KEY = 'travelid.pictogram.session.v1';
+
+const secureOpts = {
+  keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+};
 
 /** Keep only fields Travel ID needs — full profiles can exceed SecureStore limits. */
 export function leanSession(session: AuthSession): AuthSession {
@@ -36,8 +41,15 @@ export function leanSession(session: AuthSession): AuthSession {
   };
 }
 
+/** Profile blob without the Google ID token (safe for size / legacy paths). */
+function profileWithoutToken(session: AuthSession): Omit<AuthSession, 'token'> & {
+  token: '';
+} {
+  const lean = leanSession(session);
+  return { ...lean, token: '' };
+}
+
 function sanitizeLoaded(session: AuthSession): AuthSession {
-  // Drop auto-generated legacy TID-… hashes so user can create a real Travel ID
   if (session.user?.travelId && !isCreatedTravelId(session.user.travelId)) {
     return {
       ...session,
@@ -60,30 +72,7 @@ function sanitizeLoaded(session: AuthSession): AuthSession {
   return session;
 }
 
-export async function loadSession(): Promise<AuthSession | null> {
-  try {
-    const secure = await SecureStore.getItemAsync(STORAGE_KEY);
-    if (secure) {
-      const parsed = JSON.parse(secure) as AuthSession;
-      if (parsed?.tokenType === 'google' && parsed.user?.id) {
-        return sanitizeLoaded(parsed);
-      }
-    }
-  } catch {
-    // fall through
-  }
-  try {
-    const raw = await AsyncStorage.getItem(STORAGE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw) as AuthSession;
-      if (parsed?.tokenType === 'google' && parsed.user?.id) {
-        return sanitizeLoaded(parsed);
-      }
-    }
-  } catch {
-    // ignore
-  }
-
+async function clearLegacyKeys() {
   try {
     await SecureStore.deleteItemAsync(LEGACY_KEY);
   } catch {
@@ -94,6 +83,61 @@ export async function loadSession(): Promise<AuthSession | null> {
   } catch {
     /* ignore */
   }
+}
+
+export async function loadSession(): Promise<AuthSession | null> {
+  try {
+    const [secureBody, secureToken] = await Promise.all([
+      SecureStore.getItemAsync(STORAGE_KEY),
+      SecureStore.getItemAsync(TOKEN_KEY),
+    ]);
+
+    if (secureBody) {
+      const parsed = JSON.parse(secureBody) as AuthSession;
+      const token = secureToken || parsed.token;
+      if (parsed?.tokenType === 'google' && parsed.user?.id && token) {
+        // Migrate: scrub any token that was stored in the body.
+        if (parsed.token && !secureToken) {
+          try {
+            await SecureStore.setItemAsync(TOKEN_KEY, token, secureOpts);
+            await SecureStore.setItemAsync(
+              STORAGE_KEY,
+              JSON.stringify(profileWithoutToken({ ...parsed, token })),
+              secureOpts
+            );
+          } catch {
+            /* keep reading */
+          }
+        }
+        return sanitizeLoaded({ ...parsed, token });
+      }
+    }
+  } catch {
+    // fall through
+  }
+
+  // Legacy plaintext AsyncStorage — migrate token out, never keep it there.
+  try {
+    const raw = await AsyncStorage.getItem(STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as AuthSession;
+      if (parsed?.tokenType === 'google' && parsed.user?.id && parsed.token) {
+        try {
+          await saveSession(parsed);
+        } catch {
+          // If SecureStore is unavailable, drop the insecure session.
+          await AsyncStorage.removeItem(STORAGE_KEY);
+          return null;
+        }
+        return sanitizeLoaded(parsed);
+      }
+      await AsyncStorage.removeItem(STORAGE_KEY);
+    }
+  } catch {
+    // ignore
+  }
+
+  await clearLegacyKeys();
   return null;
 }
 
@@ -104,19 +148,34 @@ export async function saveSession(session: AuthSession | null) {
     } catch {
       // ignore
     }
+    try {
+      await SecureStore.deleteItemAsync(TOKEN_KEY);
+    } catch {
+      // ignore
+    }
     await AsyncStorage.removeItem(STORAGE_KEY);
     return;
   }
 
-  const payload = JSON.stringify(leanSession(session));
+  const lean = leanSession(session);
+  if (!lean.token) {
+    throw new Error('Missing session token');
+  }
+
+  // Never persist the Google ID token in AsyncStorage.
+  await AsyncStorage.removeItem(STORAGE_KEY);
 
   try {
-    await SecureStore.setItemAsync(STORAGE_KEY, payload);
-    await AsyncStorage.removeItem(STORAGE_KEY);
-    return;
-  } catch {
-    // Android SecureStore has a ~2KB limit; fall back to AsyncStorage.
+    await SecureStore.setItemAsync(TOKEN_KEY, lean.token, secureOpts);
+    await SecureStore.setItemAsync(
+      STORAGE_KEY,
+      JSON.stringify(profileWithoutToken(lean)),
+      secureOpts
+    );
+  } catch (error) {
+    // Do not fall back to plaintext storage for auth tokens.
+    throw error instanceof Error
+      ? error
+      : new Error('Could not store session securely on this device');
   }
-
-  await AsyncStorage.setItem(STORAGE_KEY, payload);
 }

@@ -15,8 +15,11 @@ export const scapiaBusParser: TicketParser = {
     const pnr = findPnr(text) || draft.pnr || draft.bookingId;
     const seat = findSeat(text);
     const name = findPassengerName(text);
-    if (seat && draft.passengers[0]) draft.passengers[0].seat = seat;
-    if (name && draft.passengers[0]) draft.passengers[0].name = name;
+    // Only patch single-passenger drafts; multi-pax comes from parseBusTicket
+    if (draft.passengers.length <= 1) {
+      if (seat && draft.passengers[0]) draft.passengers[0].seat = seat;
+      if (name && draft.passengers[0]) draft.passengers[0].name = name;
+    }
     return {
       ...draft,
       kind: 'bus',

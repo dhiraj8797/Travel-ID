@@ -21,19 +21,19 @@ export const LEGAL_DOCUMENTS: Record<LegalDocId, LegalDocument> = {
   privacy: {
     id: 'privacy',
     title: 'Privacy Policy',
-    updated: '20 July 2026',
+    updated: '24 July 2026',
     summary:
       'How Travel ID collects, uses, and protects information when you use the boarding-pass wallet.',
     sections: [
       {
         heading: 'Who we are',
         body:
-          'Travel ID (“we”, “our”, “the app”) is a mobile boarding-pass wallet for bus, train, and flight tickets. Optional sign-in uses Google Sign-In so we can show your name and photo on this device.',
+          'Travel ID (“we”, “our”, “the app”) is a mobile boarding-pass wallet for bus, train, flight, hotel, and metro tickets. Optional sign-in uses Google Sign-In so we can show your name and photo on this device.',
       },
       {
         heading: 'Information we store on your device',
         body:
-          'Boarding passes you add (PNR, train/flight/bus details, passenger names, coach/seat, QR or barcode payloads), app preferences (for example reminder toggles), and temporary drafts while scanning or uploading a ticket. This data is stored locally on your phone using on-device storage.',
+          'Boarding passes you add (PNR, train/flight/bus details, passenger names, coach/seat, QR or barcode payloads), app preferences (for example reminder toggles), and temporary drafts while scanning or uploading a ticket. Pass data is encrypted on-device (AES-256-GCM) with a key kept in the device Keystore/Keychain. Android auto-backup of app data is disabled. Screenshots are blocked while boarding barcodes and official metro gate QRs are on screen.',
       },
       {
         heading: 'Account information',
@@ -63,7 +63,7 @@ export const LEGAL_DOCUMENTS: Record<LegalDocId, LegalDocument> = {
       {
         heading: 'Security',
         body:
-          'Session tokens are stored with the most secure storage available on the device (SecureStore when possible). You are responsible for protecting your phone with a lock screen and for keeping your Google account secure.',
+          'Google session tokens are stored only in the device Keystore/Keychain (never in plain app preferences). Wallet passes are encrypted at rest. Screenshot capture is blocked on boarding-code screens. Our API proxy rate-limits requests and rejects oversized uploads. You are responsible for protecting your phone with a lock screen and for keeping your Google account secure.',
       },
       {
         heading: 'Children',
@@ -168,7 +168,7 @@ export const LEGAL_DOCUMENTS: Record<LegalDocId, LegalDocument> = {
       {
         heading: 'What we send over the network',
         body:
-          '• Sign in → Google (account picker / ID token)\n• Profile refresh → Google silent sign-in when available\n• Optional Gmail import → Google Gmail API (read-only) to find ticket PDFs in mailboxes you connect; only passes matching your profile name are offered for import\n• Live train status → RailRadar (train number, date, stations)\nTicket PDFs and photos you scan are processed on-device where possible for extracting pass fields.',
+          '• Sign in → Google (account picker / ID token)\n• Profile refresh → Google silent sign-in when available\n• Live train status → RailRadar (train number, date, stations)\nTicket PDFs and photos you scan are processed on-device where possible for extracting pass fields.',
       },
       {
         heading: 'Controls in Settings',

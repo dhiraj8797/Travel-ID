@@ -3,6 +3,7 @@ import { StyleSheet, Text, View } from 'react-native';
 import Svg, { Defs, LinearGradient, Path, Stop } from 'react-native-svg';
 import Animated, {
   Easing,
+  interpolate,
   useAnimatedStyle,
   useSharedValue,
   withTiming,
@@ -24,26 +25,40 @@ export function SpeedMeter({ speedKmh = 0, live, size = 'md' }: Props) {
   const scale = size === 'sm' ? 0.85 : 1;
   const w = Math.round(200 * scale);
   const h = Math.round(128 * scale);
+  const needleLen = Math.round(54 * scale);
+  /** Pivot sits on the arc center (viewBox cy=108 mapped to layout). */
+  const pivotY = h - 20 * scale;
+  const pivotX = w / 2;
 
   useEffect(() => {
     progress.value = withTiming(speed / MAX_SPEED, {
-      duration: 800,
+      duration: 450,
       easing: Easing.out(Easing.cubic),
     });
   }, [speed, progress]);
 
-  const needleStyle = useAnimatedStyle(() => ({
-    transform: [{ rotate: `${-90 + progress.value * 180}deg` }],
-  }));
+  /**
+   * Needle points up at 0°. Map 0→max speed to −90°…+90° (left→right).
+   * RN applies transforms right→left, so [T, R, T⁻¹] rotates around the bottom tip.
+   */
+  const needleStyle = useAnimatedStyle(() => {
+    const deg = interpolate(progress.value, [0, 1], [-90, 90]);
+    const half = needleLen / 2;
+    return {
+      transform: [
+        { translateY: half },
+        { rotate: `${deg}deg` },
+        { translateY: -half },
+      ],
+    };
+  });
 
   const tickLabels = useMemo(() => {
-    // Semi-circle geometry in viewBox coords, mapped to layout size
     const cx = w / 2;
     const cy = h - 22 * scale;
     const r = 78 * scale;
     const labelR = r + 14 * scale;
     return TICKS.map((kmh) => {
-      // 0 → left (−π), MAX → right (0) along upper semi-circle
       const t = kmh / MAX_SPEED;
       const angle = Math.PI - t * Math.PI;
       const x = cx + labelR * Math.cos(angle);
@@ -63,7 +78,6 @@ export function SpeedMeter({ speedKmh = 0, live, size = 'md' }: Props) {
               <Stop offset="100%" stopColor="#FF6B35" />
             </LinearGradient>
           </Defs>
-          {/* Background arc */}
           <Path
             d="M 22 108 A 78 78 0 0 1 178 108"
             stroke="rgba(255,255,255,0.1)"
@@ -71,7 +85,6 @@ export function SpeedMeter({ speedKmh = 0, live, size = 'md' }: Props) {
             fill="none"
             strokeLinecap="round"
           />
-          {/* Active arc */}
           <Path
             d={arcForSpeed(speed)}
             stroke="url(#g)"
@@ -79,7 +92,6 @@ export function SpeedMeter({ speedKmh = 0, live, size = 'md' }: Props) {
             fill="none"
             strokeLinecap="round"
           />
-          {/* Tick marks on the arc */}
           {TICKS.map((kmh) => {
             const t = kmh / MAX_SPEED;
             const angle = Math.PI - t * Math.PI;
@@ -102,7 +114,6 @@ export function SpeedMeter({ speedKmh = 0, live, size = 'md' }: Props) {
           })}
         </Svg>
 
-        {/* Speed number labels around the semi-circle */}
         {tickLabels.map(({ kmh, x, y }) => (
           <Text
             key={kmh}
@@ -119,12 +130,30 @@ export function SpeedMeter({ speedKmh = 0, live, size = 'md' }: Props) {
           </Text>
         ))}
 
-        <View style={[styles.pivot, { top: h - 20 * scale, left: w / 2 - 1 }]}>
-          <Animated.View style={[styles.needleArm, needleStyle]}>
-            <View style={[styles.needle, { height: 54 * scale, marginTop: -54 * scale }]} />
-          </Animated.View>
-          <View style={styles.hub} />
-        </View>
+        {/* Needle: full-length bar, pivot at bottom center */}
+        <Animated.View
+          collapsable={false}
+          style={[
+            styles.needle,
+            {
+              width: 3,
+              height: needleLen,
+              left: pivotX - 1.5,
+              top: pivotY - needleLen,
+            },
+            needleStyle,
+          ]}
+        />
+        <View
+          pointerEvents="none"
+          style={[
+            styles.hub,
+            {
+              left: pivotX - 4.5,
+              top: pivotY - 4.5,
+            },
+          ]}
+        />
 
         <View style={[styles.center, { top: h * 0.38 }]} pointerEvents="none">
           <Text style={[styles.value, size === 'sm' && styles.valueSm]}>{speed}</Text>
@@ -163,30 +192,19 @@ const styles = StyleSheet.create({
     color: 'rgba(226,248,255,0.75)',
   },
   tickSm: { fontSize: 7 },
-  pivot: {
-    position: 'absolute',
-    width: 2,
-    height: 2,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  needleArm: {
-    position: 'absolute',
-    width: 2,
-    height: 2,
-    alignItems: 'center',
-  },
   needle: {
-    width: 2.5,
+    position: 'absolute',
     borderRadius: 2,
     backgroundColor: '#00D4FF',
+    zIndex: 2,
   },
   hub: {
+    position: 'absolute',
     width: 9,
     height: 9,
     borderRadius: 5,
     backgroundColor: '#00D4FF',
-    marginTop: -4,
+    zIndex: 3,
   },
   center: { position: 'absolute', alignItems: 'center' },
   value: {

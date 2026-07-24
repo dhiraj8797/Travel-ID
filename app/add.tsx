@@ -12,7 +12,15 @@ import {
 import { useRouter } from 'expo-router';
 import { useAuth } from '../src/auth/AuthContext';
 import { promptWalletSignIn } from '../src/auth/requireWalletAccount';
+import { MetroStationPicker } from '../src/components/metro/MetroStationPicker';
 import { PassengerNamesSheet } from '../src/components/PassengerNamesSheet';
+import { useMetroCityLocation } from '../src/hooks/useMetroCityLocation';
+import {
+  buildMetroDraft,
+  getMetroNetwork,
+  MetroStation,
+} from '../src/metro';
+import { Ionicons } from '@expo/vector-icons';
 import {
   parseIncomingPayload,
   pickAndProcessPdf,
@@ -33,6 +41,23 @@ export default function AddTicketScreen() {
   const [paste, setPaste] = useState('');
   const [pnr, setPnr] = useState('');
   const [nameDraft, setNameDraft] = useState<ParsedTicketDraft | null>(null);
+  const [metroFrom, setMetroFrom] = useState<MetroStation | null>(null);
+  const [metroTo, setMetroTo] = useState<MetroStation | null>(null);
+  const [metroQr, setMetroQr] = useState('');
+  const [picker, setPicker] = useState<'from' | 'to' | null>(null);
+  const metroLoc = useMetroCityLocation(true);
+  const metroNetwork = metroLoc.networkId
+    ? getMetroNetwork(metroLoc.networkId)
+    : null;
+  const stationCount = metroNetwork
+    ? Object.keys(metroNetwork.stations).length
+    : 0;
+
+  // Reset station picks when city changes
+  useEffect(() => {
+    setMetroFrom(null);
+    setMetroTo(null);
+  }, [metroLoc.networkId]);
 
   useEffect(() => {
     if (!session?.user?.id) {
@@ -44,6 +69,47 @@ export default function AddTicketScreen() {
   const goReview = (draft: ParsedTicketDraft) => {
     setPendingDraft(draft);
     router.push('/review');
+  };
+
+  const openStationPicker = (which: 'from' | 'to') => {
+    if (!metroLoc.networkId) {
+      Alert.alert(
+        'Location needed',
+        'Allow location so we can load metro stations for your city.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Enable location',
+            onPress: () => void metroLoc.requestPermissionAndFetch(),
+          },
+        ]
+      );
+      return;
+    }
+    setPicker(which);
+  };
+
+  const onCreateMetro = () => {
+    if (!metroLoc.networkId) {
+      Alert.alert('Metro', 'Fetch your location first to load city stations.');
+      return;
+    }
+    if (!metroFrom || !metroTo) {
+      Alert.alert('Metro', 'Pick From and To stations.');
+      return;
+    }
+    if (metroFrom.id === metroTo.id) {
+      Alert.alert('Metro', 'From and To must be different stations.');
+      return;
+    }
+    goReview(
+      buildMetroDraft({
+        from: metroFrom,
+        to: metroTo,
+        networkId: metroLoc.networkId,
+        qrPayload: metroQr.trim() || undefined,
+      })
+    );
   };
 
   const onFetchPnr = async () => {
@@ -135,6 +201,91 @@ export default function AddTicketScreen() {
         berth from the IRCTC PNR API. PDF/photo also auto-use PNR when found.
       </Text>
 
+      <View style={styles.metroCard}>
+        <View style={styles.metroHead}>
+          <View style={{ flex: 1, paddingRight: 8 }}>
+            <Text style={[styles.cardEyebrow, { color: colors.metro }]}>
+              INDIA METRO
+            </Text>
+            <Text style={styles.cardTitle}>
+              {metroNetwork ? `${metroNetwork.city} Metro` : 'Metro pass'}
+            </Text>
+          </View>
+          <Pressable
+            style={styles.locChip}
+            onPress={() =>
+              metroLoc.permission === 'granted'
+                ? void metroLoc.refresh()
+                : void metroLoc.requestPermissionAndFetch()
+            }
+          >
+            {metroLoc.loading ? (
+              <ActivityIndicator size="small" color={colors.metro} />
+            ) : (
+              <Ionicons name="locate" size={14} color={colors.metro} />
+            )}
+            <Text style={styles.locChipText} numberOfLines={1}>
+              {metroLoc.chipLabel}
+            </Text>
+          </Pressable>
+        </View>
+        <Text style={styles.cardBody}>
+          {metroLoc.loading
+            ? 'Detecting your city from GPS…'
+            : metroNetwork
+              ? `${metroNetwork.name} · ${stationCount} stations. Pick From / To for offline route + GPS guide. Paste official gate QR if you have it.`
+              : metroLoc.error ||
+                'Enable location (top right) to load metro stations for your city.'}
+        </Text>
+        <Pressable
+          style={[
+            styles.stationBtn,
+            !metroLoc.networkId && styles.stationBtnLocked,
+          ]}
+          onPress={() => openStationPicker('from')}
+        >
+          <Text style={styles.stationLabel}>From</Text>
+          <Text style={styles.stationValue}>
+            {!metroLoc.networkId
+              ? 'Waiting for location…'
+              : metroFrom?.name || 'Select station'}
+          </Text>
+        </Pressable>
+        <Pressable
+          style={[
+            styles.stationBtn,
+            !metroLoc.networkId && styles.stationBtnLocked,
+          ]}
+          onPress={() => openStationPicker('to')}
+        >
+          <Text style={styles.stationLabel}>To</Text>
+          <Text style={styles.stationValue}>
+            {!metroLoc.networkId
+              ? 'Waiting for location…'
+              : metroTo?.name || 'Select station'}
+          </Text>
+        </Pressable>
+        <TextInput
+          style={styles.pnrInput}
+          placeholder="Optional: paste metro ticket QR payload"
+          placeholderTextColor={colors.faint}
+          value={metroQr}
+          onChangeText={setMetroQr}
+          editable={!busy}
+        />
+        <Pressable
+          style={[
+            styles.secondaryBtn,
+            { backgroundColor: colors.metro },
+            (!metroLoc.networkId || busy) && { opacity: 0.5 },
+          ]}
+          onPress={onCreateMetro}
+          disabled={busy || !metroLoc.networkId}
+        >
+          <Text style={styles.secondaryBtnText}>Create metro pass</Text>
+        </Pressable>
+      </View>
+
       <View style={styles.pnrCard}>
         <Text style={[styles.cardEyebrow, { color: colors.orange }]}>PNR API</Text>
         <Text style={styles.cardTitle}>Fetch by PNR</Text>
@@ -162,9 +313,9 @@ export default function AddTicketScreen() {
 
       <Pressable style={styles.card} onPress={onUploadPdf} disabled={busy}>
         <Text style={styles.cardEyebrow}>PDF</Text>
-        <Text style={styles.cardTitle}>Upload ticket PDF</Text>
+        <Text style={styles.cardTitle}>Upload booking PDF</Text>
         <Text style={styles.cardBody}>
-          Best for IRCTC e-tickets and bus booking PDFs with selectable text.
+          Hotel confirmations (MMT, Booking.com, Agoda…), IRCTC e-tickets, and bus PDFs. Text PDFs preferred; scanned PDFs use OCR.
         </Text>
       </Pressable>
 
@@ -224,6 +375,23 @@ export default function AddTicketScreen() {
           setNameDraft(null);
         }}
       />
+
+      <MetroStationPicker
+        visible={picker === 'from' && !!metroLoc.networkId}
+        title="From station"
+        networkId={metroLoc.networkId || 'blr'}
+        excludeId={metroTo?.id}
+        onClose={() => setPicker(null)}
+        onSelect={setMetroFrom}
+      />
+      <MetroStationPicker
+        visible={picker === 'to' && !!metroLoc.networkId}
+        title="To station"
+        networkId={metroLoc.networkId || 'blr'}
+        excludeId={metroFrom?.id}
+        onClose={() => setPicker(null)}
+        onSelect={setMetroTo}
+      />
     </ScrollView>
   );
 }
@@ -270,6 +438,63 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 20,
     color: colors.muted,
+  },
+  metroCard: {
+    backgroundColor: colors.bgElevated,
+    borderRadius: radii.lg,
+    padding: spacing.lg,
+    borderWidth: 1,
+    borderColor: colors.metro,
+    marginBottom: spacing.md,
+  },
+  metroHead: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: 4,
+  },
+  locChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    maxWidth: 140,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 999,
+    backgroundColor: colors.metroSoft,
+    borderWidth: 1,
+    borderColor: 'rgba(155,45,142,0.35)',
+  },
+  locChipText: {
+    color: colors.metro,
+    fontSize: 11,
+    fontWeight: '800',
+    fontFamily: 'Outfit_700Bold',
+    flexShrink: 1,
+  },
+  stationBtn: {
+    marginTop: spacing.sm,
+    borderRadius: radii.md,
+    borderWidth: 1,
+    borderColor: colors.line,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 12,
+    backgroundColor: colors.surface,
+  },
+  stationBtnLocked: {
+    opacity: 0.55,
+  },
+  stationLabel: {
+    fontFamily: 'Outfit_700Bold',
+    fontSize: 11,
+    color: colors.muted,
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+  },
+  stationValue: {
+    fontFamily: 'DMSans_400Regular',
+    fontSize: 15,
+    color: colors.ink,
+    marginTop: 4,
   },
   pnrCard: {
     backgroundColor: colors.bgElevated,

@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  Animated,
+  Animated as RNAnimated,
   Image,
   Linking,
   Pressable,
@@ -17,6 +17,13 @@ import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Circle } from 'react-native-svg';
+import Reanimated, {
+  Easing,
+  useAnimatedStyle,
+  useSharedValue,
+  withRepeat,
+  withTiming,
+} from 'react-native-reanimated';
 import { useLiveTrainQuery } from '../../hooks/useLiveTrainStatus';
 import { useTrainDetails } from '../../hooks/useTrainDetails';
 import {
@@ -36,9 +43,12 @@ const CARD = '#0C1729';
 const CYAN = '#00D4FF';
 const BLUE = '#2979FF';
 const GREEN = '#00E676';
+const RED = '#FF5252';
 const ORANGE = '#FF8A50';
 const MUTED = '#94A3B8';
 const BORDER = 'rgba(255,255,255,0.1)';
+
+type StationPhase = 'here' | 'departed' | 'upcoming' | 'idle';
 
 type Props = {
   trainNumber: string;
@@ -110,9 +120,11 @@ export function WhereIsMyTrainView({
   } = useTrainDetails(trainNumber);
 
   const loading = liveLoading || detailsLoading;
+  const coachPositionRaw =
+    details?.coachPosition || live?.coachPosition || undefined;
   const coachCount = useMemo(
-    () => parseCoachPosition(details?.coachPosition).length,
-    [details?.coachPosition]
+    () => parseCoachPosition(coachPositionRaw).length,
+    [coachPositionRaw]
   );
 
   const halts = useMemo(
@@ -143,6 +155,13 @@ export function WhereIsMyTrainView({
     const nextKey = rawStats.nextName || live?.nextHaltCode || '';
     const raw = rawStats.kmToNext;
     const prev = stableKmRef.current;
+    const atNext =
+      !!live?.currentStationCode &&
+      !!live?.nextHaltCode &&
+      live.currentStationCode.toUpperCase() === live.nextHaltCode.toUpperCase() &&
+      ['arrived', 'at-station'].includes(
+        String(live.currentStopStatus || '').toLowerCase()
+      );
 
     // New next station → reset
     if (nextKey && nextKey !== prev.next) {
@@ -153,17 +172,26 @@ export function WhereIsMyTrainView({
     // No fresh reading → keep last
     if (raw == null) return prev.km;
 
-    // Reject upward spikes (typical when segmentProgress briefly missing → full segment)
-    if (prev.km != null && raw > prev.km + 12) {
+    // Don't flash "0 km" unless the train is actually at that halt
+    if (raw === 0 && !atNext && prev.km != null && prev.km > 2) {
       return prev.km;
     }
 
-    // Light smoothing toward new value
-    const blended =
-      prev.km == null ? raw : Math.round(prev.km * 0.55 + raw * 0.45);
-    stableKmRef.current = { next: nextKey || prev.next, km: blended };
-    return blended;
-  }, [rawStats.kmToNext, rawStats.nextName, live?.nextHaltCode]);
+    // Reject only large upward spikes (missing progress → full segment)
+    if (prev.km != null && raw > prev.km + 15) {
+      return prev.km;
+    }
+
+    // Trust decreases immediately so UI tracks real-time remaining km
+    stableKmRef.current = { next: nextKey || prev.next, km: raw };
+    return raw;
+  }, [
+    rawStats.kmToNext,
+    rawStats.nextName,
+    live?.nextHaltCode,
+    live?.currentStationCode,
+    live?.currentStopStatus,
+  ]);
 
   const stats = showLiveDetails
     ? { ...rawStats, kmToNext: stableKmToNext }
@@ -186,6 +214,41 @@ export function WhereIsMyTrainView({
         : { kind: 'none' as const },
     [showLiveDetails, halts, live]
   );
+
+  /** PF for live banner: at-station → that PF; en route / approaching → next halt PF */
+  const liveStatusPlatform = useMemo(() => {
+    if (!showLiveDetails) return undefined;
+    if (trainPos.kind === 'at') {
+      const stop = halts[trainPos.index];
+      const pf = cleanPf(stop?.platform);
+      if (pf) {
+        return {
+          platform: pf,
+          phase: 'at' as const,
+          station: stop?.stationName || stop?.stationCode,
+        };
+      }
+    }
+    if (trainPos.kind === 'between') {
+      const stop = halts[trainPos.toIndex];
+      const pf = cleanPf(stop?.platform);
+      if (pf) {
+        return {
+          platform: pf,
+          phase: 'next' as const,
+          station: stop?.stationName || stop?.stationCode,
+        };
+      }
+    }
+    if (summary?.activePlatform) {
+      return {
+        platform: summary.activePlatform,
+        phase: summary.activePlatformPhase || 'next',
+        station: summary.activePlatformStation,
+      };
+    }
+    return undefined;
+  }, [showLiveDetails, trainPos, halts, summary]);
 
   const delayMins = showLiveDetails ? live?.delayMinutes ?? 0 : 0;
   const punctualityLabel =
@@ -275,7 +338,7 @@ export function WhereIsMyTrainView({
       <CoachCompositionSheet
         visible={coachOpen}
         onClose={() => setCoachOpen(false)}
-        coachPosition={details?.coachPosition}
+        coachPosition={coachPositionRaw}
         trainNumber={trainNumber}
         trainName={titleName}
         highlightCoach={coach}
@@ -408,6 +471,11 @@ export function WhereIsMyTrainView({
               </Text>
               <Text style={styles.progressBannerSub} numberOfLines={1}>
                 {[
+                  liveStatusPlatform?.platform
+                    ? liveStatusPlatform.phase === 'at'
+                      ? `PF ${liveStatusPlatform.platform} · at station`
+                      : `PF ${liveStatusPlatform.platform} · next stop`
+                    : null,
                   punctualityLabel,
                   etaNext ? `ETA ${etaNext}` : null,
                 ]
@@ -457,6 +525,20 @@ export function WhereIsMyTrainView({
                   : trainPos.kind === 'at'
                     ? trainPos.index + 1 === index
                     : false;
+              const isTrainHere =
+                trainPos.kind === 'at' && trainPos.index === index;
+              const stationPhase = resolveStationPhase(
+                index,
+                trainPos,
+                stop,
+                showLiveDetails
+              );
+              // Live section: PF for station train is at, or next (approaching) after leaving
+              const showLivePf =
+                showLiveDetails &&
+                (isTrainHere ||
+                  (trainPos.kind === 'between' && trainPos.toIndex === index) ||
+                  (!live && isSourceStation));
               return (
                 <StationCard
                   key={`${stop.stationCode}-${stop.sequence}-${index}`}
@@ -468,13 +550,12 @@ export function WhereIsMyTrainView({
                   isCurrent={
                     showLiveDetails ? isCurrentStop(stop, live) : false
                   }
-                  showPlatform={isSourceStation}
-                  trainOnStation={
-                    trainPos.kind === 'at' && trainPos.index === index
-                  }
+                  showPlatform={showLivePf || (!showLiveDetails && isSourceStation)}
+                  trainOnStation={isTrainHere}
                   trainOnOutgoing={
                     trainPos.kind === 'between' && trainPos.fromIndex === index
                   }
+                  stationPhase={stationPhase}
                   segmentProgress={
                     trainPos.kind === 'between' ? trainPos.progress : 0
                   }
@@ -567,6 +648,89 @@ function RoundChip({
   );
 }
 
+/** Green blink while train is at station; solid green after depart; red for upcoming. */
+function StationStatusDot({ phase }: { phase: StationPhase }) {
+  const pulse = useSharedValue(1);
+
+  useEffect(() => {
+    if (phase !== 'here') {
+      pulse.value = 1;
+      return;
+    }
+    pulse.value = withRepeat(
+      withTiming(0.22, { duration: 650, easing: Easing.inOut(Easing.ease) }),
+      -1,
+      true
+    );
+  }, [phase, pulse]);
+
+  const blinkStyle = useAnimatedStyle(() => ({
+    opacity: phase === 'here' ? pulse.value : 1,
+    transform: [
+      {
+        scale:
+          phase === 'here' ? 0.85 + pulse.value * 0.2 : 1,
+      },
+    ],
+  }));
+
+  const color =
+    phase === 'here' || phase === 'departed'
+      ? GREEN
+      : phase === 'upcoming'
+        ? RED
+        : MUTED;
+
+  return (
+    <View style={styles.dotWrap}>
+      {phase === 'here' ? (
+        <Reanimated.View
+          style={[styles.dotHalo, { borderColor: GREEN }, blinkStyle]}
+        />
+      ) : null}
+      <Reanimated.View
+        style={[
+          styles.statusDot,
+          { backgroundColor: color, borderColor: color },
+          phase === 'here' && blinkStyle,
+          phase === 'departed' && styles.statusDotDeparted,
+          phase === 'upcoming' && styles.statusDotUpcoming,
+        ]}
+      />
+    </View>
+  );
+}
+
+function resolveStationPhase(
+  index: number,
+  trainPos: ReturnType<typeof resolveTrainPosition> | { kind: 'none' },
+  stop: RailRadarStop,
+  showLiveDetails: boolean
+): StationPhase {
+  // Prefer live train position when tracking
+  if (showLiveDetails && trainPos.kind === 'at') {
+    if (index === trainPos.index) return 'here';
+    if (index < trainPos.index) return 'departed';
+    return 'upcoming';
+  }
+
+  if (showLiveDetails && trainPos.kind === 'between') {
+    if (index <= trainPos.fromIndex) return 'departed';
+    if (index === trainPos.toIndex) return 'upcoming';
+    if (index > trainPos.toIndex) return 'upcoming';
+    return 'upcoming';
+  }
+
+  // Fall back to per-stop status from live/schedule route
+  const status = String(stop.status || '').toLowerCase();
+  if (status === 'departed' || status === 'skipped') return 'departed';
+  if (status === 'arrived' || status === 'at-station' || status === 'arriving') {
+    return 'here';
+  }
+  if (status === 'upcoming' || status === 'scheduled') return 'upcoming';
+  return showLiveDetails ? 'upcoming' : 'idle';
+}
+
 function StationCard({
   stop,
   live,
@@ -577,6 +741,7 @@ function StationCard({
   showPlatform,
   trainOnStation,
   trainOnOutgoing,
+  stationPhase = 'idle',
   segmentProgress,
   kmToNext,
   delayMinutes,
@@ -591,18 +756,24 @@ function StationCard({
   showPlatform?: boolean;
   trainOnStation?: boolean;
   trainOnOutgoing?: boolean;
+  stationPhase?: StationPhase;
   segmentProgress?: number;
   kmToNext?: number;
   delayMinutes?: number;
   isNextStop?: boolean;
 }) {
   const status = String(stop.status || '').toLowerCase();
-  const done = status === 'departed' || status === 'skipped';
+  const done =
+    stationPhase === 'departed' ||
+    status === 'departed' ||
+    status === 'skipped';
   const here =
+    stationPhase === 'here' ||
     trainOnStation ||
     isCurrent ||
     status === 'arrived' ||
     status === 'at-station';
+  const upcoming = stationPhase === 'upcoming' || (!done && !here && stationPhase !== 'idle');
   const stopDelay = stop.delayArrival ?? stop.delayDeparture ?? delayMinutes ?? 0;
   const late = stopDelay > 0;
   const schArr = clock(stop.scheduledArrival);
@@ -638,9 +809,9 @@ function StationCard({
         ? `Likely ${stopDelay} min late`
         : 'On time';
 
-  const progressAnim = useRef(new Animated.Value(segmentProgress || 0)).current;
+  const progressAnim = useRef(new RNAnimated.Value(segmentProgress || 0)).current;
   useEffect(() => {
-    Animated.timing(progressAnim, {
+    RNAnimated.timing(progressAnim, {
       toValue: clamp(segmentProgress || 0, 0, 1),
       duration: 700,
       useNativeDriver: false,
@@ -656,48 +827,44 @@ function StationCard({
     <View style={styles.stationRow}>
       <View style={styles.railCol}>
         {!isFirst ? (
-          <View style={[styles.railLine, (done || here) && styles.railOn]} />
+          <View
+            style={[
+              styles.railLine,
+              (done || here) && styles.railOnGreen,
+            ]}
+          />
         ) : (
           <View style={styles.railSpacer} />
         )}
-        <View
-          style={[
-            styles.stationIcon,
-            (here || isYours || trainOnStation) && styles.stationIconOn,
-            trainOnStation && styles.stationIconTrain,
-          ]}
-        >
-          <MaterialCommunityIcons
-            name={
-              trainOnStation
-                ? 'train'
-                : isFirst
-                  ? 'city-variant-outline'
-                  : isLast
-                    ? 'flag-checkered'
-                    : 'office-building-outline'
-            }
-            size={18}
-            color={here || isYours || trainOnStation ? CYAN : MUTED}
-          />
-        </View>
+        <StationStatusDot
+          phase={
+            here
+              ? 'here'
+              : done
+                ? 'departed'
+                : upcoming
+                  ? 'upcoming'
+                  : 'idle'
+          }
+        />
         {!isLast ? (
           <View style={styles.railOutgoing}>
             <View
               style={[
                 styles.railLineFill,
-                (done || here || trainOnOutgoing) && styles.railOn,
+                (done || here || trainOnOutgoing) && styles.railOnGreen,
+                upcoming && !done && !here && styles.railUpcoming,
               ]}
             />
             {trainOnOutgoing && (
-              <Animated.View style={[styles.movingTrain, { top: trainTop }]}>
+              <RNAnimated.View style={[styles.movingTrain, { top: trainTop }]}>
                 <View style={styles.movingTrainBubble}>
                   <MaterialCommunityIcons name="train" size={16} color={BG} />
                 </View>
                 {kmToNext != null && (
                   <Text style={styles.movingKm}>{kmToNext} km</Text>
                 )}
-              </Animated.View>
+              </RNAnimated.View>
             )}
           </View>
         ) : (
@@ -744,7 +911,11 @@ function StationCard({
             </Text>
             <Text style={styles.stationMeta} numberOfLines={2}>
               {[
-                isNextStop && kmToNext != null ? `${kmToNext} km left` : null,
+                isNextStop && kmToNext != null && kmToNext > 0
+                  ? `${kmToNext} km left`
+                  : isNextStop && here
+                    ? 'Arriving'
+                    : null,
                 dist || (isFirst ? '0 km' : null),
                 pf ? `Platform ${pf}` : null,
                 stop.stationCode,
@@ -1124,10 +1295,19 @@ function computeJourneyStats(halts: RailRadarStop[], live?: LiveTrainStatus) {
   ) {
     const rem = next.distance - prev.distance;
     kmToNext =
-      rem > 0 ? Math.max(0, Math.round(rem * (1 - seg))) : 0;
+      rem > 0 ? Math.max(0, Math.round(rem * (1 - seg))) : undefined;
   }
   // If progress is missing, leave kmToNext undefined — UI keeps last stable value
 
+  // Never show 0 km to next unless the train is actually at that halt
+  if (
+    kmToNext === 0 &&
+    next &&
+    live?.currentStationCode &&
+    live.currentStationCode.toUpperCase() !== next.stationCode.toUpperCase()
+  ) {
+    kmToNext = undefined;
+  }
   return {
     journeyPct: clamp(journeyPct, 0, 100),
     kmToNext,
@@ -1442,7 +1622,7 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#fff',
   },
-  stationRow: { flexDirection: 'row', minHeight: 100 },
+  stationRow: { flexDirection: 'row', minHeight: 100, alignItems: 'stretch' },
   railCol: { width: 48, alignItems: 'center' },
   railLine: {
     flex: 1,
@@ -1462,7 +1642,40 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,212,255,0.18)',
   },
   railOn: { backgroundColor: CYAN },
+  railOnGreen: { backgroundColor: GREEN },
+  railUpcoming: { backgroundColor: 'rgba(255,82,82,0.35)' },
   railSpacer: { flex: 1 },
+  dotWrap: {
+    width: 38,
+    height: 38,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 2,
+  },
+  statusDot: {
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    borderWidth: 2,
+  },
+  statusDotDeparted: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+  },
+  statusDotUpcoming: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+  },
+  dotHalo: {
+    position: 'absolute',
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    borderWidth: 2,
+    backgroundColor: 'rgba(0,230,118,0.12)',
+  },
   stationIcon: {
     width: 38,
     height: 38,
@@ -1568,11 +1781,11 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   stationCardHere: {
-    borderColor: 'rgba(0,212,255,0.4)',
-    backgroundColor: 'rgba(0,212,255,0.06)',
+    borderColor: 'rgba(0,230,118,0.5)',
+    backgroundColor: 'rgba(0,230,118,0.08)',
   },
   stationCardYours: { borderColor: 'rgba(255,138,80,0.4)' },
-  stationInner: { flexDirection: 'row', gap: 8 },
+  stationInner: { flexDirection: 'row', gap: 8, alignItems: 'flex-start' },
   badge: {
     alignSelf: 'flex-start',
     paddingHorizontal: 8,
@@ -1581,7 +1794,7 @@ const styles = StyleSheet.create({
     marginBottom: 5,
   },
   badgeStart: { backgroundColor: 'rgba(0,230,118,0.18)' },
-  badgeNow: { backgroundColor: 'rgba(0,212,255,0.2)' },
+  badgeNow: { backgroundColor: 'rgba(0,230,118,0.22)' },
   badgeYours: { backgroundColor: 'rgba(255,138,80,0.2)' },
   badgeText: {
     fontFamily: 'DMSans_700Bold',

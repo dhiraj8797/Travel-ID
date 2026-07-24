@@ -3,9 +3,13 @@ import { parseRailTicket } from '../ticketText';
 import { applyStatusToPassenger } from '../railStatus';
 import { TicketParser, findPnr } from './types';
 
+import { looksLikeHotel } from '../hotelDetect';
+
 export const irctcParser: TicketParser = {
   name: 'IrctcParser',
   canParse(text) {
+    // Never claim hotel booking confirmations as train tickets
+    if (looksLikeHotel(text)) return false;
     const t = text.toLowerCase();
     const isScapiaTrain =
       t.includes('scapia') &&
@@ -16,7 +20,9 @@ export const irctcParser: TicketParser = {
       isScapiaTrain ||
       /train\s*(no|number|name)/i.test(text) ||
       /cnf\/[a-z0-9]+\//i.test(text) ||
-      (/\b\d{10}\b/.test(text) && /\b(train|pnr|coach|berth)\b/i.test(text))
+      (/\b\d{10}\b/.test(text) &&
+        /\b(train|coach|berth)\b/i.test(text) &&
+        !/hotel|check[\s\-]?in|room\s*type/i.test(text))
     );
   },
   parse(text) {

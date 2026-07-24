@@ -15,6 +15,7 @@ import {
   boardingCodeType,
   bwipBcidFor,
 } from '../../utils/boardingCode';
+import { useSecureScreen } from '../../hooks/useSecureScreen';
 
 type Props = {
   ticket: Ticket;
@@ -34,6 +35,7 @@ export function BoardingBarcodeView({ ticket, caption }: Props) {
   const [loading, setLoading] = useState(true);
 
   const raw = boardingCodeRaw(ticket);
+  useSecureScreen(Boolean(raw || ticket.boardingCode?.imageUri));
   const type = boardingCodeType(ticket);
   const imageUri = ticket.boardingCode?.imageUri;
   const isWide = type === 'PDF417';

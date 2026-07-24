@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -23,9 +23,11 @@ import { buildQrPayload } from '../../utils/ticketFormat';
 import { formatRailRadarError } from '../../services/railRadar';
 import { parseCoachPosition } from '../../utils/coachComposition';
 import { CoachCompositionSheet } from './CoachCompositionSheet';
+import { CoachTrainMap, TrackSignalAspect } from './CoachTrainMap';
 import { GreenBlinkNumber } from './GreenBlinkNumber';
 import { PassSceneBackground } from './PassSceneBackground';
 import { TrainRouteSheet } from './TrainRouteSheet';
+import { useSecureScreen } from '../../hooks/useSecureScreen';
 
 const Navy = '#07132D';
 const Orange = '#FF6500';
@@ -52,6 +54,7 @@ export function TrainBoardingPass({ ticket, onBack, onMenu, embedded }: Props) {
   const contentWidth = Math.min(width - 20, 420);
   const compact = height < 780;
   const qrSize = compact ? 78 : 92;
+  useSecureScreen(true);
   const {
     live,
     times,
@@ -76,13 +79,32 @@ export function TrainBoardingPass({ ticket, onBack, onMenu, embedded }: Props) {
     : [{ name: 'Traveller' }];
   const passengerCoach = passengers[0]?.coach;
   const passengerSeat = passengers[0]?.seat;
+  const coachPositionRaw =
+    details?.coachPosition || live?.coachPosition || undefined;
   const coachUnits = (() => {
     try {
-      return parseCoachPosition(details?.coachPosition);
+      return parseCoachPosition(coachPositionRaw);
     } catch {
       return [];
     }
   })();
+
+  /** Same green / yellow / red language as the live station track. */
+  const trackSignalAspect = useMemo((): TrackSignalAspect => {
+    if (phase === 'completed') return 'red';
+    if (!live) {
+      if (phase === 'soon') return 'yellow';
+      if (phase === 'live') return 'green';
+      return 'off';
+    }
+    const cur = (live.currentStationCode || '').toUpperCase();
+    const dest = (ticket.toCode || '').toUpperCase();
+    const next = (live.nextHaltCode || '').toUpperCase();
+    if (dest && cur === dest) return 'yellow';
+    if (dest && next === dest) return 'green';
+    if (phase === 'live' || phase === 'soon') return 'green';
+    return 'yellow';
+  }, [phase, live, ticket.toCode]);
 
   useEffect(() => {
     let alive = true;
@@ -169,13 +191,26 @@ export function TrainBoardingPass({ ticket, onBack, onMenu, embedded }: Props) {
   const detailsFromPf = details?.halts?.find(
     (h) => h.stationCode.toUpperCase() === fromCode
   )?.platform;
-  // Platform only for source / boarding station (not destination)
+  // Boarding PF stays on the departure column; live pill follows current/next halt
   const boardingPf =
     (showLiveDetails ? summary?.boardingPlatform : undefined) ||
     detailsFromPf ||
     ticket.platform;
-  const livePfLabel =
-    showLiveDetails && boardingPf ? `PF ${boardingPf}` : undefined;
+  const liveActivePf =
+    showLiveDetails
+      ? summary?.activePlatform || boardingPf
+      : undefined;
+  const livePfLabel = liveActivePf
+    ? [
+        `PF ${liveActivePf}`,
+        summary?.activePlatformStation &&
+        summary.activePlatformPhase !== 'origin'
+          ? summary.activePlatformStation
+          : null,
+      ]
+        .filter(Boolean)
+        .join(' · ')
+    : undefined;
   const phaseTitle = summary?.phaseTitle;
   const phaseBody = summary?.phaseBody;
 
@@ -395,7 +430,7 @@ export function TrainBoardingPass({ ticket, onBack, onMenu, embedded }: Props) {
               if (alarm.armed) {
                 Alert.alert(
                   'Arrival alarm',
-                  `Alarm is on for ${toName} (${toCode}). Sound plays 5 min before arrival.`,
+                  `Alarm is on for ${toName} (${toCode}). Sound plays 20 min before arrival.`,
                   [
                     { text: 'Keep on', style: 'cancel' },
                     {
@@ -416,12 +451,17 @@ export function TrainBoardingPass({ ticket, onBack, onMenu, embedded }: Props) {
               }
               void alarm.arm().then((r) => {
                 if (!r.ok) {
-                  Alert.alert('Arrival alarm', 'Could not set alarm yet.');
+                  Alert.alert(
+                    'Arrival alarm',
+                    r.reason === 'disabled'
+                      ? 'Alarm notifications are off. Turn them on in Settings → Alarm notifications.'
+                      : 'Could not set alarm yet.'
+                  );
                   return;
                 }
                 Alert.alert(
                   'Alarm set',
-                  `You'll get a sound alert ~5 minutes before arrival at ${toName} (${toCode}).`
+                  `You'll get a sound alert ~20 minutes before arrival at ${toName} (${toCode}).`
                 );
               });
             }}
@@ -440,10 +480,10 @@ export function TrainBoardingPass({ ticket, onBack, onMenu, embedded }: Props) {
               numberOfLines={1}
             >
               {alarm.sounding
-                ? 'Arriving soon · tap to silence'
+                ? 'STOP ALARM · tap now'
                 : alarm.armed
-                  ? 'Alarm on · 5 min before your station'
-                  : 'Set alarm · 5 min before arrival'}
+                  ? 'Alarm on · 20 min before your station'
+                  : 'Set alarm · 20 min before arrival'}
             </Text>
           </Pressable>
         </View>
@@ -492,51 +532,38 @@ export function TrainBoardingPass({ ticket, onBack, onMenu, embedded }: Props) {
           />
         </View>
 
-        <Pressable style={styles.coachSection} onPress={() => setCoachOpen(true)}>
-          <View style={styles.coachHead}>
+        <View style={styles.coachSection}>
+          <Pressable style={styles.coachHead} onPress={() => setCoachOpen(true)}>
             <MaterialCommunityIcons name="train" size={18} color={Orange} />
             <Text style={styles.coachTitle}>COACH POSITION</Text>
             <Text style={styles.coachCount}>
               {coachUnits.length
-                ? `${coachUnits.length} units · Engine → last`
+                ? `${coachUnits.length} coaches · swipe →`
                 : 'Tap to view'}
             </Text>
             <Ionicons name="chevron-forward" size={16} color={Label} />
-          </View>
+          </Pressable>
           {coachUnits.length > 0 ? (
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.coachStrip}
-            >
-              {coachUnits.slice(0, 18).map((c) => {
-                const mine =
-                  passengerCoach &&
-                  c.code.toUpperCase() === passengerCoach.toUpperCase();
-                return (
-                  <View
-                    key={`${c.position}-${c.code}`}
-                    style={[styles.miniCoach, mine && styles.miniCoachMine]}
-                  >
-                    <Text style={[styles.miniCode, mine && { color: Orange }]}>
-                      {c.code}
-                    </Text>
-                    <Text style={styles.miniPos}>{c.position}</Text>
-                  </View>
-                );
-              })}
-              {coachUnits.length > 18 ? (
-                <Text style={styles.miniMore}>+{coachUnits.length - 18}</Text>
-              ) : null}
-            </ScrollView>
+            <CoachTrainMap
+              coaches={coachUnits}
+              highlightCoach={passengerCoach}
+              signalAspect={trackSignalAspect}
+              onPressMap={() => setCoachOpen(true)}
+              onPressCoach={() => setCoachOpen(true)}
+              height={98}
+            />
           ) : (
-            <Text style={styles.coachHint}>
-              {passengerCoach
-                ? `Your coach ${passengerCoach} · open for full rake & seat layout`
-                : 'Open for engine → last coach order and seat layout'}
-            </Text>
+            <Pressable onPress={() => setCoachOpen(true)}>
+              <Text style={styles.coachHint}>
+                {loading
+                  ? 'Loading coach order…'
+                  : passengerCoach
+                    ? `Your coach ${passengerCoach} · open when rake loads`
+                    : 'Coach order loads with live train data — tap to retry'}
+              </Text>
+            </Pressable>
           )}
-        </Pressable>
+        </View>
 
         <View style={styles.hDivider} />
 
@@ -639,7 +666,7 @@ export function TrainBoardingPass({ ticket, onBack, onMenu, embedded }: Props) {
       <CoachCompositionSheet
         visible={coachOpen}
         onClose={() => setCoachOpen(false)}
-        coachPosition={details?.coachPosition}
+        coachPosition={coachPositionRaw}
         trainNumber={ticket.trainNumber}
         trainName={trainName}
         highlightCoach={passengerCoach}
@@ -1038,38 +1065,6 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: Label,
     textAlign: 'right',
-  },
-  coachStrip: { gap: 4, paddingRight: 4 },
-  miniCoach: {
-    minWidth: 36,
-    paddingHorizontal: 6,
-    paddingVertical: 6,
-    borderRadius: 8,
-    backgroundColor: '#fff',
-    borderWidth: 1,
-    borderColor: 'rgba(7,19,45,0.1)',
-    alignItems: 'center',
-  },
-  miniCoachMine: {
-    borderColor: Orange,
-    backgroundColor: 'rgba(255,101,0,0.1)',
-  },
-  miniCode: {
-    fontFamily: 'Outfit_700Bold',
-    fontSize: 11,
-    color: Navy,
-  },
-  miniPos: {
-    fontFamily: 'DMSans_400Regular',
-    fontSize: 9,
-    color: Label,
-  },
-  miniMore: {
-    fontFamily: 'Outfit_700Bold',
-    fontSize: 12,
-    color: Label,
-    alignSelf: 'center',
-    paddingHorizontal: 6,
   },
   coachHint: {
     fontFamily: 'DMSans_400Regular',

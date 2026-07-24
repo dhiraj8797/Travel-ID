@@ -2,7 +2,7 @@
   "expo": {
     "name": "Travel ID",
     "slug": "travel-id",
-    "version": "1.0.0",
+    "version": "1.0.8",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -14,15 +14,16 @@
       "infoPlist": {
         "NSCameraUsageDescription": "Scan ticket QR codes and barcodes, or photograph tickets for Travel ID.",
         "NSPhotoLibraryUsageDescription": "Choose ticket PDFs or photos from your library.",
-        "NSLocationWhenInUseUsageDescription": "Travel ID uses GPS to show your live train speed while you travel."
+        "NSLocationWhenInUseUsageDescription": "Travel ID uses GPS for live train speed, bus remaining distance, and offline metro station guidance.",
       }
     },
     "android": {
       "package": "com.travelid.app",
-      "versionCode": 99,
-      "usesCleartextTraffic": true,
+      "versionCode": 144,
+      "usesCleartextTraffic": false,
+      "allowBackup": false,
       "adaptiveIcon": {
-        "backgroundColor": "#FF6A00",
+        "backgroundColor": "#FFFFFF",
         "foregroundImage": "./assets/icon.png"
       },
       "permissions": [
@@ -62,7 +63,7 @@
       [
         "expo-location",
         {
-          "locationWhenInUsePermission": "Allow Travel ID to use GPS for live train speed while you travel."
+          "locationWhenInUsePermission": "Allow Travel ID to use GPS for live train speed, bus distance, and offline metro guidance."
         }
       ],
       [
@@ -83,7 +84,6 @@
     ],
     "extra": {
       "router": {},
-      "apiProxyUrl": "https://essential-enjoy-upgrading-weekly.trycloudflare.com",
       "googleWebClientId": "635583361817-to14vbtpikh6tmpfsoco5o6eeaojf55m.apps.googleusercontent.com"
     }
   }

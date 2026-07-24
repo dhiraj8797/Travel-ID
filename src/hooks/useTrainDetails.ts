@@ -2,7 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useCallback, useEffect, useState } from 'react';
 import { fetchTrainDetails, TrainDetails } from '../services/railRadar';
 
-const cacheKey = (n: string) => `train_details_v2_${n}`;
+const cacheKey = (n: string) => `train_details_v3_${n}`;
 
 export function useTrainDetails(trainNumber?: string) {
   const [details, setDetails] = useState<TrainDetails | null>(null);

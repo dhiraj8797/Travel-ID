@@ -11,11 +11,45 @@ import {
 import { useFocusEffect, useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { AnimatedTravelBackground } from '../src/components/AnimatedTravelBackground';
+import { MetroStationPicker } from '../src/components/metro/MetroStationPicker';
 import { TicketPass } from '../src/components/TicketDetail';
 import { useTickets } from '../src/context/TicketContext';
+import { formatTravelTime, isMetroNetworkId, planMetroRoute } from '../src/metro';
 import { getPendingDraft } from '../src/state/pendingDraft';
 import { ParsedTicketDraft, Ticket, TicketKind } from '../src/types/ticket';
 import { colors, radii, spacing } from '../src/theme';
+import {
+  applyCompletedIfPast,
+  getPassPhase,
+  isPastPass,
+} from '../src/utils/passTime';
+import {
+  isPlaceholderHotelValue,
+} from '../src/parsers/hotelDetect';
+
+function parseReviewDate(value?: string): Date | null {
+  if (!value || isPlaceholderHotelValue(value)) return null;
+  const months: Record<string, number> = {
+    jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5,
+    jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11,
+  };
+  const m = value.match(
+    /(\d{1,2})[\s\-\/]([A-Za-z]{3,9}|\d{1,2})[\s\-\/,]*(\d{2,4})/
+  );
+  if (!m) return null;
+  const day = Number(m[1]);
+  let month: number;
+  let year = Number(m[3]);
+  if (year < 100) year += 2000;
+  if (/[A-Za-z]/.test(m[2])) {
+    month = months[m[2].slice(0, 3).toLowerCase()];
+  } else {
+    month = Number(m[2]) - 1;
+  }
+  if (!Number.isFinite(day) || month == null || month < 0 || month > 11) return null;
+  const d = new Date(year, month, day);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
 
 export default function ReviewScreen() {
   const router = useRouter();
@@ -23,6 +57,7 @@ export default function ReviewScreen() {
   const [draft, setDraft] = useState<ParsedTicketDraft | null>(null);
   const [saving, setSaving] = useState(false);
   const [showRaw, setShowRaw] = useState(true);
+  const [metroPicker, setMetroPicker] = useState<'from' | 'to' | null>(null);
 
   useFocusEffect(
     useCallback(() => {
@@ -33,7 +68,7 @@ export default function ReviewScreen() {
         ]);
         return;
       }
-      setDraft(pending);
+      setDraft(applyCompletedIfPast(pending));
     }, [router])
   );
 
@@ -44,6 +79,8 @@ export default function ReviewScreen() {
     id: 'preview',
     createdAt: new Date().toISOString(),
   };
+  const previewPast =
+    !!draft.journeyCompleted || isPastPass(preview) || getPassPhase(preview) === 'past';
 
   const patch = (partial: Partial<ParsedTicketDraft>) =>
     setDraft((prev) => (prev ? { ...prev, ...partial } : prev));
@@ -72,19 +109,89 @@ export default function ReviewScreen() {
         kind: 'flight',
         title: draft.flightNumber || draft.operator || 'Flight Pass',
       });
+    } else if (kind === 'hotel') {
+      patch({
+        kind: 'hotel',
+        title: draft.hotelName || draft.to || draft.operator || 'Hotel Pass',
+        hotelName: draft.hotelName || draft.to || draft.operator,
+        bookingId: draft.bookingId || draft.pnr,
+        departureTime: draft.departureTime || '14:00',
+        arrivalTime: draft.arrivalTime || '11:00',
+      });
+    } else if (kind === 'metro') {
+      const net =
+        draft.metroNetworkId && isMetroNetworkId(draft.metroNetworkId)
+          ? draft.metroNetworkId
+          : 'blr';
+      patch({
+        kind: 'metro',
+        title: draft.title || `${draft.from} → ${draft.to}`,
+        operator: draft.operator || 'Metro',
+        bookingPlatform: draft.bookingPlatform || 'Metro',
+        metroNetworkId: net,
+      });
     } else {
       patch({ kind: 'rail', title: draft.trainName || 'Train Pass' });
     }
   };
 
   const save = async () => {
+    if (draft.kind === 'hotel') {
+      const hotelName = draft.hotelName || draft.to;
+      const guestOk = draft.passengers.some(
+        (p) => p.name && !isPlaceholderHotelValue(p.name)
+      );
+      const bookingOk = !isPlaceholderHotelValue(draft.bookingId || draft.pnr);
+      const checkInOk = !isPlaceholderHotelValue(draft.departureDate);
+      const checkOutOk = !isPlaceholderHotelValue(draft.arrivalDate);
+      const inDate = parseReviewDate(draft.departureDate);
+      const outDate = parseReviewDate(draft.arrivalDate);
+      const orderOk = !inDate || !outDate || outDate.getTime() >= inDate.getTime();
+
+      const issues: string[] = [];
+      if (isPlaceholderHotelValue(hotelName)) issues.push('Hotel name');
+      if (!guestOk) issues.push('Guest name');
+      if (!bookingOk) issues.push('Booking ID');
+      if (!checkInOk) issues.push('Check-in date');
+      if (!checkOutOk) issues.push('Check-out date');
+      if (!orderOk) issues.push('Check-out must be on/after check-in');
+
+      if (issues.length || draft.needsManualCompletion) {
+        Alert.alert(
+          'Review booking details',
+          issues.length
+            ? `Please confirm or fill: ${issues.join(', ')}. Room number can stay blank — it is assigned at check-in.`
+            : 'Some fields look incomplete. Edit them below before creating the Hotel Pass.',
+          [
+            { text: 'Keep editing', style: 'cancel' },
+            { text: 'Create Hotel Pass anyway', onPress: () => void doSave() },
+          ]
+        );
+        return;
+      }
+      await doSave();
+      return;
+    }
+
     const missing =
       !draft.from ||
       draft.from === 'Origin' ||
+      draft.from === 'City' ||
       !draft.to ||
       draft.to === 'Destination' ||
-      draft.passengers.length === 0 ||
-      draft.passengers.some((p) => !p.name || p.name === 'Traveller');
+      (draft.kind !== 'metro' &&
+        (draft.passengers.length === 0 ||
+          draft.passengers.some(
+            (p) => !p.name || p.name === 'Traveller' || p.name === 'Guest'
+          )));
+
+    if (draft.kind === 'metro' && (!draft.metroFromStationId || !draft.metroToStationId)) {
+      Alert.alert(
+        'Metro stations',
+        'Pick From and To stations (search list) so we can build offline route guidance.'
+      );
+      return;
+    }
 
     if (draft.needsManualCompletion || missing) {
       Alert.alert(
@@ -113,7 +220,11 @@ export default function ReviewScreen() {
   };
 
   const bgVariant =
-    draft.kind === 'bus' ? 'bus' : draft.kind === 'flight' ? 'bus' : 'rail';
+    draft.kind === 'bus' || draft.kind === 'hotel'
+      ? 'bus'
+      : draft.kind === 'flight'
+        ? 'bus'
+        : 'rail';
 
   return (
     <View style={styles.screen}>
@@ -135,6 +246,43 @@ export default function ReviewScreen() {
             </Text>
           )}
 
+          {(previewPast || draft.journeyCompleted) && (
+            <View style={styles.completedBanner}>
+              <Text style={styles.completedBannerTitle}>Completed journey</Text>
+              <Text style={styles.completedBannerBody}>
+                Travel date is in the past — this pass will be saved as Past (no live tracking).
+              </Text>
+            </View>
+          )}
+
+          <Pressable
+            style={[
+              styles.completedToggle,
+              draft.journeyCompleted && styles.completedToggleOn,
+            ]}
+            onPress={() =>
+              patch({
+                journeyCompleted: !draft.journeyCompleted,
+                bookingStatus: !draft.journeyCompleted
+                  ? 'Completed'
+                  : draft.bookingStatus === 'Completed'
+                    ? 'Confirmed'
+                    : draft.bookingStatus,
+              })
+            }
+          >
+            <Text
+              style={[
+                styles.completedToggleText,
+                draft.journeyCompleted && styles.completedToggleTextOn,
+              ]}
+            >
+              {draft.journeyCompleted
+                ? '✓ Marked as completed'
+                : 'Mark as completed journey'}
+            </Text>
+          </Pressable>
+
           <View style={styles.summary}>
             <SummaryRow
               label="Passengers"
@@ -153,7 +301,7 @@ export default function ReviewScreen() {
               }
             />
             <SummaryRow
-              label="From"
+              label={draft.kind === 'hotel' ? 'City' : 'From'}
               value={
                 draft.fromCode
                   ? `${draft.fromCode}${draft.from ? ` · ${draft.from}` : ''}`
@@ -161,17 +309,28 @@ export default function ReviewScreen() {
               }
             />
             <SummaryRow
-              label="To"
+              label={draft.kind === 'hotel' ? 'Hotel' : 'To'}
               value={
-                draft.toCode
-                  ? `${draft.toCode}${draft.to ? ` · ${draft.to}` : ''}`
-                  : draft.to
+                draft.kind === 'hotel'
+                  ? draft.hotelName || draft.to
+                  : draft.toCode
+                    ? `${draft.toCode}${draft.to ? ` · ${draft.to}` : ''}`
+                    : draft.to
               }
             />
             <SummaryRow label="Date" value={draft.departureDate || '—'} />
-            <SummaryRow label="Departure" value={draft.departureTime} />
-            <SummaryRow label="Arrival" value={draft.arrivalTime || '—'} />
-            <SummaryRow label="PNR" value={draft.pnr || draft.bookingId || '—'} />
+            <SummaryRow
+              label={draft.kind === 'hotel' ? 'Check-in' : 'Departure'}
+              value={draft.departureTime}
+            />
+            <SummaryRow
+              label={draft.kind === 'hotel' ? 'Check-out' : 'Arrival'}
+              value={draft.arrivalTime || '—'}
+            />
+            <SummaryRow
+              label={draft.kind === 'hotel' ? 'Confirmation' : 'PNR'}
+              value={draft.pnr || draft.bookingId || '—'}
+            />
             {draft.kind === 'flight' ? (
               <>
                 <SummaryRow
@@ -190,6 +349,14 @@ export default function ReviewScreen() {
                     '—'
                   }
                 />
+              </>
+            ) : draft.kind === 'hotel' ? (
+              <>
+                <SummaryRow
+                  label="Hotel"
+                  value={draft.hotelName || draft.to || draft.operator || '—'}
+                />
+                <SummaryRow label="Room" value={draft.roomType || draft.classType || '—'} />
               </>
             ) : (
               <SummaryRow
@@ -214,6 +381,8 @@ export default function ReviewScreen() {
                   { key: 'rail' as const, label: 'Train', on: styles.kindChipOn },
                   { key: 'bus' as const, label: 'Bus', on: styles.kindChipOnBus },
                   { key: 'flight' as const, label: 'Flight', on: styles.kindChipOnFlight },
+                  { key: 'hotel' as const, label: 'Hotel', on: styles.kindChipOnHotel },
+                  { key: 'metro' as const, label: 'Metro', on: styles.kindChipOnMetro },
                 ] as const
               ).map((k) => (
                 <Pressable
@@ -228,25 +397,70 @@ export default function ReviewScreen() {
               ))}
             </View>
 
-            <Field label="From" value={draft.from} onChange={(from) => patch({ from })} />
-            <Field label="To" value={draft.to} onChange={(to) => patch({ to })} />
+            {draft.kind === 'metro' ? (
+              <>
+                <Text style={styles.metroHint}>
+                  {draft.metroHasOfficialQr || draft.originalQrValue
+                    ? 'Official gate QR is saved. Confirm stations for live guidance.'
+                    : 'Pick stations for guidance. Add an official QR later for gate entry.'}
+                </Text>
+                <Pressable
+                  style={styles.metroStationBtn}
+                  onPress={() => setMetroPicker('from')}
+                >
+                  <Text style={styles.fieldLabel}>From station</Text>
+                  <Text style={styles.metroStationValue}>{draft.from}</Text>
+                </Pressable>
+                <Pressable
+                  style={styles.metroStationBtn}
+                  onPress={() => setMetroPicker('to')}
+                >
+                  <Text style={styles.fieldLabel}>To station</Text>
+                  <Text style={styles.metroStationValue}>{draft.to}</Text>
+                </Pressable>
+              </>
+            ) : (
+              <>
+                <Field
+                  label={draft.kind === 'hotel' ? 'City' : 'From'}
+                  value={draft.from}
+                  onChange={(from) => patch({ from })}
+                />
+                <Field
+                  label={draft.kind === 'hotel' ? 'Hotel name' : 'To'}
+                  value={draft.kind === 'hotel' ? draft.hotelName || draft.to : draft.to}
+                  onChange={(value) =>
+                    draft.kind === 'hotel'
+                      ? patch({ hotelName: value, to: value, title: value, operator: value })
+                      : patch({ to: value })
+                  }
+                />
+              </>
+            )}
             <Field
-              label="Journey date"
+              label={draft.kind === 'hotel' ? 'Check-in date' : 'Journey date'}
               value={draft.departureDate}
               onChange={(departureDate) => patch({ departureDate })}
             />
             <Field
-              label="Departure time"
+              label={draft.kind === 'hotel' ? 'Check-in time' : 'Departure time'}
               value={draft.departureTime}
               onChange={(departureTime) => patch({ departureTime })}
             />
+            {draft.kind === 'hotel' ? (
+              <Field
+                label="Check-out date"
+                value={draft.arrivalDate ?? ''}
+                onChange={(arrivalDate) => patch({ arrivalDate })}
+              />
+            ) : null}
             <Field
-              label="Arrival time"
+              label={draft.kind === 'hotel' ? 'Check-out time' : 'Arrival time'}
               value={draft.arrivalTime ?? ''}
               onChange={(arrivalTime) => patch({ arrivalTime })}
             />
             <Field
-              label="PNR / Booking ID"
+              label={draft.kind === 'hotel' ? 'Confirmation / Booking ID' : 'PNR / Booking ID'}
               value={draft.pnr || draft.bookingId || ''}
               onChange={(value) => patch({ pnr: value, bookingId: value })}
             />
@@ -256,30 +470,73 @@ export default function ReviewScreen() {
                   ? 'Operator'
                   : draft.kind === 'flight'
                     ? 'Airline / flight'
-                    : 'Train name'
+                    : draft.kind === 'hotel'
+                      ? 'Room type'
+                      : 'Train name'
               }
               value={
                 draft.kind === 'bus'
                   ? draft.operator
                   : draft.kind === 'flight'
                     ? draft.flightNumber || draft.operator
-                    : draft.trainName ?? ''
+                    : draft.kind === 'hotel'
+                      ? draft.roomType || draft.classType || ''
+                      : draft.trainName ?? ''
               }
               onChange={(value) => {
                 if (draft.kind === 'bus') {
                   patch({ operator: value, title: value });
                 } else if (draft.kind === 'flight') {
                   patch({ flightNumber: value, operator: value, title: value });
+                } else if (draft.kind === 'hotel') {
+                  patch({ roomType: value, classType: value });
                 } else {
                   patch({ trainName: value, title: value });
                 }
               }}
             />
-            <Field
-              label="Class / type"
-              value={draft.classType ?? ''}
-              onChange={(classType) => patch({ classType })}
-            />
+            {draft.kind === 'hotel' ? (
+              <>
+                <Field
+                  label="Booking through"
+                  value={draft.bookingPlatform ?? ''}
+                  onChange={(bookingPlatform) => patch({ bookingPlatform })}
+                />
+                <Field
+                  label="Hotel address"
+                  value={draft.hotelAddress ?? ''}
+                  onChange={(hotelAddress) => patch({ hotelAddress })}
+                />
+                <Field
+                  label="Phone (tap to call on pass)"
+                  value={draft.operatorContact || draft.supportNumber || ''}
+                  onChange={(value) =>
+                    patch({ operatorContact: value, supportNumber: value })
+                  }
+                />
+                <Field
+                  label="Email"
+                  value={draft.hotelEmail ?? ''}
+                  onChange={(hotelEmail) => patch({ hotelEmail })}
+                />
+                <Field
+                  label="Room number"
+                  value={draft.roomNumber ?? ''}
+                  onChange={(roomNumber) => patch({ roomNumber })}
+                />
+                <Field
+                  label="Meal plan"
+                  value={draft.mealPlan ?? ''}
+                  onChange={(mealPlan) => patch({ mealPlan })}
+                />
+              </>
+            ) : (
+              <Field
+                label="Class / type"
+                value={draft.classType ?? ''}
+                onChange={(classType) => patch({ classType })}
+              />
+            )}
             {draft.kind === 'rail' ? (
               <>
                 <Field
@@ -299,6 +556,12 @@ export default function ReviewScreen() {
                 />
               </>
             ) : null}
+
+            <Field
+              label="Final amount paid (₹)"
+              value={draft.fare ?? ''}
+              onChange={(fare) => patch({ fare })}
+            />
 
             <Text style={styles.paxSection}>
               Passengers ({draft.passengers.length})
@@ -444,10 +707,99 @@ export default function ReviewScreen() {
             onPress={save}
             disabled={saving}
           >
-            <Text style={styles.saveText}>{saving ? 'Saving…' : 'Create Pass'}</Text>
+            <Text style={styles.saveText}>
+              {saving
+                ? 'Saving…'
+                : draft.kind === 'hotel'
+                  ? 'Create Hotel Pass'
+                  : draft.kind === 'metro'
+                    ? 'Create Metro Live Pass'
+                    : 'Create Pass'}
+            </Text>
           </Pressable>
         </ScrollView>
       </SafeAreaView>
+
+      <MetroStationPicker
+        visible={metroPicker === 'from'}
+        title="From station"
+        networkId={
+          draft.metroNetworkId && isMetroNetworkId(draft.metroNetworkId)
+            ? draft.metroNetworkId
+            : 'blr'
+        }
+        excludeId={draft.metroToStationId}
+        onClose={() => setMetroPicker(null)}
+        onSelect={(station) => {
+          const net =
+            draft.metroNetworkId && isMetroNetworkId(draft.metroNetworkId)
+              ? draft.metroNetworkId
+              : 'blr';
+          const toId = draft.metroToStationId;
+          const route =
+            toId && station.id !== toId
+              ? planMetroRoute(station.id, toId, net)
+              : null;
+          patch({
+            metroNetworkId: net,
+            metroFromStationId: station.id,
+            from: station.shortName || station.name,
+            fromCode: station.id,
+            boardingPoint: station.name,
+            title: `${station.shortName || station.name} → ${draft.to}`,
+            travelTime: route
+              ? formatTravelTime(route.estimatedMinutes)
+              : draft.travelTime,
+            classType: route
+              ? route.legs.map((l) => l.lineName).join(' → ')
+              : draft.classType,
+            needsManualCompletion:
+              draft.needsManualCompletion &&
+              (!toId || toId === 'Destination' || !draft.metroToStationId),
+          });
+        }}
+      />
+      <MetroStationPicker
+        visible={metroPicker === 'to'}
+        title="To station"
+        networkId={
+          draft.metroNetworkId && isMetroNetworkId(draft.metroNetworkId)
+            ? draft.metroNetworkId
+            : 'blr'
+        }
+        excludeId={draft.metroFromStationId}
+        onClose={() => setMetroPicker(null)}
+        onSelect={(station) => {
+          const net =
+            draft.metroNetworkId && isMetroNetworkId(draft.metroNetworkId)
+              ? draft.metroNetworkId
+              : 'blr';
+          const fromId = draft.metroFromStationId;
+          const route =
+            fromId && station.id !== fromId
+              ? planMetroRoute(fromId, station.id, net)
+              : null;
+          patch({
+            metroNetworkId: net,
+            metroToStationId: station.id,
+            to: station.shortName || station.name,
+            toCode: station.id,
+            droppingPoint: station.name,
+            title: `${draft.from} → ${station.shortName || station.name}`,
+            travelTime: route
+              ? formatTravelTime(route.estimatedMinutes)
+              : draft.travelTime,
+            classType: route
+              ? route.legs.map((l) => l.lineName).join(' → ')
+              : draft.classType,
+            needsManualCompletion: !(
+              fromId &&
+              draft.metroFromStationId &&
+              draft.from !== 'Origin'
+            ),
+          });
+        }}
+      />
     </View>
   );
 }
@@ -513,6 +865,48 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#FFB454',
     marginBottom: 10,
+  },
+  completedBanner: {
+    backgroundColor: 'rgba(46, 160, 100, 0.18)',
+    borderRadius: radii.md,
+    borderWidth: 1,
+    borderColor: 'rgba(46, 160, 100, 0.45)',
+    padding: 12,
+    marginBottom: 10,
+    gap: 4,
+  },
+  completedBannerTitle: {
+    fontFamily: 'Outfit_700Bold',
+    fontSize: 14,
+    color: '#7DDEA5',
+  },
+  completedBannerBody: {
+    fontFamily: 'DMSans_400Regular',
+    fontSize: 13,
+    color: colors.muted,
+    lineHeight: 18,
+  },
+  completedToggle: {
+    alignSelf: 'flex-start',
+    borderRadius: radii.md,
+    borderWidth: 1,
+    borderColor: colors.line,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    marginBottom: 12,
+    backgroundColor: colors.panel,
+  },
+  completedToggleOn: {
+    borderColor: 'rgba(46, 160, 100, 0.55)',
+    backgroundColor: 'rgba(46, 160, 100, 0.14)',
+  },
+  completedToggleText: {
+    fontFamily: 'DMSans_500Medium',
+    fontSize: 13,
+    color: colors.muted,
+  },
+  completedToggleTextOn: {
+    color: '#7DDEA5',
   },
   summary: {
     backgroundColor: colors.panel,
@@ -594,6 +988,8 @@ const styles = StyleSheet.create({
   kindChipOn: { backgroundColor: colors.blue, borderColor: colors.blue },
   kindChipOnBus: { backgroundColor: colors.orange, borderColor: colors.orange },
   kindChipOnFlight: { backgroundColor: colors.purple, borderColor: colors.purple },
+  kindChipOnHotel: { backgroundColor: colors.hotel, borderColor: colors.hotel },
+  kindChipOnMetro: { backgroundColor: colors.metro, borderColor: colors.metro },
   kindText: { fontFamily: 'DMSans_500Medium', color: '#fff' },
   kindTextOn: { color: '#fff' },
   field: { marginBottom: 4 },
@@ -602,6 +998,28 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: colors.muted,
     marginBottom: 4,
+  },
+  metroHint: {
+    fontFamily: 'DMSans_400Regular',
+    fontSize: 13,
+    color: colors.muted,
+    marginBottom: 8,
+    lineHeight: 18,
+  },
+  metroStationBtn: {
+    borderWidth: 1,
+    borderColor: colors.line,
+    borderRadius: radii.sm,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    marginBottom: 6,
+    backgroundColor: 'rgba(255,255,255,0.04)',
+  },
+  metroStationValue: {
+    fontFamily: 'Outfit_700Bold',
+    fontSize: 16,
+    color: '#fff',
+    marginTop: 2,
   },
   input: {
     borderWidth: 1,

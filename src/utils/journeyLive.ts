@@ -1,5 +1,6 @@
 import { Ticket } from '../types/ticket';
 import { formatJourneyDateLabel, toJourneyDateIso } from '../services/railRadar';
+import { isPastPass } from './passTime';
 
 /** UI / polling phase for train live tracking. */
 export type LiveJourneyPhase =
@@ -8,8 +9,11 @@ export type LiveJourneyPhase =
   | 'live' // journey active — show live location/delay/ETA
   | 'completed'; // destination reached / train completed
 
-const LIVE_LEAD_MS = 2 * 60 * 60 * 1000; // 2 hours before departure
-const COMPLETED_GRACE_MS = 45 * 60 * 1000; // keep live briefly after scheduled arrival
+const LIVE_LEAD_MS = 2 * 60 * 60 * 1000; // trains: 2 hours before departure
+/** Bus live journey unlocks this long before scheduled departure. */
+export const BUS_LIVE_LEAD_MS = 30 * 60 * 1000;
+/** Keep live tracking after scheduled arrival — trains are often delayed for hours. */
+const COMPLETED_GRACE_MS = 18 * 60 * 60 * 1000;
 
 function parseTimeMinutes(time?: string): number | null {
   const raw = (time || '').trim();
@@ -114,8 +118,11 @@ export function getLiveJourneyPhase(input: {
   /** Passenger destination stop status when known */
   destinationStopStatus?: string;
   now?: Date;
+  /** Override default 2h lead (bus uses 30 min). */
+  leadMs?: number;
 }): LiveJourneyPhase {
   const now = input.now ?? new Date();
+  const leadMs = input.leadMs ?? LIVE_LEAD_MS;
   const { departureAt, arrivalAt } = resolveJourneyWindow(input);
   const status = String(input.liveStatus || '').toLowerCase();
   const destSt = String(input.destinationStopStatus || '').toLowerCase();
@@ -134,7 +141,7 @@ export function getLiveJourneyPhase(input: {
     return 'soon';
   }
 
-  const liveFrom = departureAt.getTime() - LIVE_LEAD_MS;
+  const liveFrom = departureAt.getTime() - leadMs;
   const liveUntil =
     (arrivalAt?.getTime() ?? departureAt.getTime() + 12 * 60 * 60 * 1000) +
     COMPLETED_GRACE_MS;
@@ -208,4 +215,52 @@ export function phaseFromTicket(
     destinationStopStatus,
   });
   return { phase, window };
+}
+
+/** Bus journey phase — time unlock later; past trips stay completed. */
+export function getBusJourneyPhase(
+  ticket: Ticket,
+  now?: Date
+): { phase: LiveJourneyPhase; window: JourneyWindow } {
+  const window = resolveJourneyWindow(ticket);
+  void now;
+
+  // Never show live GPS on finished trips
+  if (isPastPass(ticket)) {
+    return { phase: 'completed', window };
+  }
+
+  // TEMP: unlock tracking for upcoming + ongoing (30‑min gate later)
+  // When ready: getLiveJourneyPhase({ ...ticket, now, leadMs: BUS_LIVE_LEAD_MS })
+  return { phase: 'live', window };
+}
+
+export function busPhaseCopy(
+  phase: LiveJourneyPhase,
+  window: JourneyWindow,
+  destinationName: string
+): { title: string; body: string } {
+  switch (phase) {
+    case 'too-early':
+      return {
+        title: window.departureLabel,
+        body: 'Live location & remaining km unlock 30 minutes before departure.',
+      };
+    case 'soon':
+      return {
+        title: 'Journey tracking ready',
+        body: `GPS tracking is on toward ${destinationName}.`,
+      };
+    case 'completed':
+      return {
+        title: 'Journey completed',
+        body: `You’ve reached ${destinationName}.`,
+      };
+    case 'live':
+    default:
+      return {
+        title: 'Live bus journey',
+        body: `Tracking remaining distance to ${destinationName}.`,
+      };
+  }
 }

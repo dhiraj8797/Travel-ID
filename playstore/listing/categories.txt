@@ -1,0 +1,4 @@
+App category: Travel & Local
+Tags: boarding pass, train PNR, flight ticket, bus ticket, hotel booking, travel wallet
+Contact email: (set in Play Console)
+Website: (set after hosting website/)

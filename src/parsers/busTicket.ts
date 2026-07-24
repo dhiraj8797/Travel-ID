@@ -27,17 +27,142 @@ function enrichTravelTime(dep?: string, arr?: string): string | undefined {
   return `${h}h ${String(m).padStart(2, '0')}m`;
 }
 
-function parseBusPassengerName(text: string): {
-  name?: string;
+function parseBusPassengers(
+  text: string,
+  fallbackSeat?: string,
+  fallbackSeatType?: string
+): Array<{
+  name: string;
   age?: string;
   gender?: string;
-} {
-  const m = text.match(
-    /(?:Passenger|Pax|Name)\s*[:#]?\s*((?:Mr\.|Mrs\.|Ms\.)?\s*[A-Za-z][A-Za-z .'-]{1,40}?)(?=\s*(?:Age|Gender|Sex|Seat|Status|Male|Female|\d{1,2}\b|$|\n))/i
-  );
-  const age = text.match(/Age\s*[:#]?\s*(\d{1,3})/i)?.[1];
-  const gender = text.match(/(?:Sex|Gender)\s*[:#]?\s*([MFmf]|MALE|FEMALE)/i)?.[1];
-  return { name: m?.[1]?.trim(), age, gender };
+  seat?: string;
+  seatType?: string;
+  status?: string;
+}> {
+  const confirmed = /confirm/i.test(text) ? 'Confirmed' : undefined;
+  const found: Array<{
+    name: string;
+    age?: string;
+    gender?: string;
+    seat?: string;
+    seatType?: string;
+    status?: string;
+  }> = [];
+
+  // Block patterns: "Passenger 1: NAME ... Age: 28 ... Seat: 12"
+  const blockRe =
+    /(?:Passenger|Pax)\s*(?:No\.?|Number|#)?\s*\d*\s*[:.\-]?\s*((?:Mr\.|Mrs\.|Ms\.|M\/s\.?)?\s*[A-Za-z][A-Za-z .'-]{1,48})([\s\S]{0,160}?)(?=(?:Passenger|Pax)\s*(?:No\.?|Number|#)?\s*\d*\s*[:.\-]|Boarding\b|Drop(?:ping)?\b|Operator\b|Total\s*Fare\b|PNR\b|$)/gi;
+
+  let m: RegExpExecArray | null;
+  while ((m = blockRe.exec(text)) !== null) {
+    const name = m[1].trim().replace(/\s+/g, ' ');
+    const chunk = `${m[1]} ${m[2]}`;
+    if (!name || /^traveller$/i.test(name)) continue;
+    const age = chunk.match(/\bAge\s*[:#]?\s*(\d{1,3})\b/i)?.[1];
+    const gender = chunk.match(
+      /\b(?:Sex|Gender)\s*[:#]?\s*(Male|Female|M|F)\b/i
+    )?.[1];
+    const seat =
+      chunk.match(/\bSeat(?:s)?\s*(?:No|Number)?\s*[:#]?\s*([A-Z]?\d{1,3}[A-Z]?)\b/i)?.[1] ||
+      chunk.match(/\b([ULS]\d{1,2})\b/)?.[1];
+    found.push({
+      name,
+      age,
+      gender,
+      seat,
+      seatType: fallbackSeatType,
+      status: confirmed,
+    });
+  }
+
+  // Line patterns: "1. NAME 28 M Seat 12" / "NAME | 28 | M | 12"
+  if (found.length < 2) {
+    const lineRe =
+      /(?:^|\n)\s*(?:\d{1,2}[.)]\s*)?((?:Mr\.|Mrs\.|Ms\.)?\s*[A-Z][A-Za-z .'-]{2,40}?)\s*[|,/]?\s*(?:Age\s*[:#]?)?(\d{1,3})\s*(?:yrs?|years?)?\s*[|,/]?\s*(Male|Female|M|F)?\s*[|,/]?\s*(?:Seat\s*[:#]?)?([A-Z]?\d{1,3}[A-Z]?)?/gim;
+    let lm: RegExpExecArray | null;
+    const lineHits: typeof found = [];
+    while ((lm = lineRe.exec(text)) !== null) {
+      const name = lm[1].trim().replace(/\s+/g, ' ');
+      if (
+        !name ||
+        /^(passenger|pax|name|from|to|seat|age|gender|operator|boarding|dropping)$/i.test(
+          name
+        )
+      ) {
+        continue;
+      }
+      lineHits.push({
+        name,
+        age: lm[2],
+        gender: lm[3],
+        seat: lm[4],
+        seatType: fallbackSeatType,
+        status: confirmed,
+      });
+    }
+    if (lineHits.length > found.length) {
+      found.length = 0;
+      found.push(...lineHits);
+    }
+  }
+
+  // "Name: X" repeated with nearby Age
+  if (found.length === 0) {
+    const nameAgeRe =
+      /(?:Passenger|Pax|Name)\s*[:#]?\s*((?:Mr\.|Mrs\.|Ms\.)?\s*[A-Za-z][A-Za-z .'-]{1,40}?)\s*(?:[\s\S]{0,80}?\bAge\s*[:#]?\s*(\d{1,3}))?/gi;
+    let nm: RegExpExecArray | null;
+    while ((nm = nameAgeRe.exec(text)) !== null) {
+      const name = nm[1].trim().replace(/\s+/g, ' ');
+      if (!name || /^traveller$/i.test(name)) continue;
+      found.push({
+        name,
+        age: nm[2],
+        seat: fallbackSeat,
+        seatType: fallbackSeatType,
+        status: confirmed,
+      });
+    }
+  }
+
+  // Deduplicate by name
+  const uniq: typeof found = [];
+  const seen = new Set<string>();
+  for (const p of found) {
+    const key = p.name.toUpperCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const seatCode = (p.seat || '').toUpperCase();
+    const derivedType =
+      seatCode.startsWith('U')
+        ? 'Upper'
+        : seatCode.startsWith('L')
+          ? 'Lower'
+          : seatCode.startsWith('S')
+            ? 'Side'
+            : undefined;
+    uniq.push({
+      ...p,
+      seatType: derivedType || p.seatType || fallbackSeatType,
+    });
+  }
+
+  if (uniq.length === 0) {
+    return [
+      {
+        name: 'Traveller',
+        seat: fallbackSeat,
+        seatType: fallbackSeatType,
+        status: confirmed,
+      },
+    ];
+  }
+
+  // If only first has seat from global fallback
+  if (uniq.length === 1 && !uniq[0].seat && fallbackSeat) {
+    uniq[0].seat = fallbackSeat;
+  }
+
+  return uniq;
 }
 
 export function parseBusTicket(text: string): ParsedTicketDraft {
@@ -115,7 +240,6 @@ export function parseBusTicket(text: string): ParsedTicketDraft {
     /\bSeat\b\s*([ULS]\d{1,2})\b/i,
   ]);
 
-  const paxInfo = parseBusPassengerName(text);
   const seatType =
     matchField(text, [
       /Seat\s*Type\s*[:#]?\s*([A-Za-z /-]{3,30})/i,
@@ -126,6 +250,8 @@ export function parseBusTicket(text: string): ParsedTicketDraft {
       : seat?.toUpperCase().startsWith('L')
         ? 'Lower'
         : undefined);
+
+  const passengers = parseBusPassengers(text, seat || undefined, seatType);
 
   const times = [...text.matchAll(/\b((?:[01]?\d|2[0-3]):[0-5]\d)\b/g)].map((m) => m[1]);
 
@@ -226,16 +352,7 @@ export function parseBusTicket(text: string): ParsedTicketDraft {
       /\b(\d{2,4}\s*KM)\b/i,
     ]),
     travelTime,
-    passengers: [
-      {
-        name: paxInfo.name || 'Traveller',
-        age: paxInfo.age,
-        gender: paxInfo.gender,
-        seat,
-        seatType,
-        status: /confirm/i.test(text) ? 'Confirmed' : undefined,
-      },
-    ],
+    passengers,
     fare: matchField(text, [
       /(?:Total\s*)?(?:Fare|Amount)\s*[:#]?\s*(?:INR|Rs\.?|₹)?\s*([0-9,.]+)/i,
     ]),
@@ -252,7 +369,7 @@ export function parseBusTicket(text: string): ParsedTicketDraft {
       : 'Show QR and photo ID at boarding.',
     rawText: text,
     confidence:
-      bookingId && seat && boardingPoint !== from
+      bookingId && (seat || passengers.some((p) => p.seat)) && boardingPoint !== from
         ? 0.93
         : bookingId
           ? 0.82

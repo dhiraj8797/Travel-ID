@@ -10,10 +10,15 @@ import {
   refreshGoogleProfile,
   signInWithGoogleAccount,
 } from './googleSignIn';
+import {
+  loadUserProfile,
+  mergeStoredProfile,
+  saveUserProfile,
+} from './profileStore';
 import { loadSession, saveSession } from './sessionStorage';
 import { isCreatedTravelId, normalizeTravelId } from './travelId';
 import { claimUniqueTravelId } from './travelIdRegistry';
-import { AuthSession, AuthUser, displayName } from './types';
+import { AuthSession, displayName } from './types';
 
 type ProfileDetailsInput = {
   firstName: string;
@@ -51,12 +56,34 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setLoading(false);
         return;
       }
-      setSession(stored);
+      // Restore durable profile if session was missing DOB / Travel ID
+      const profile = await loadUserProfile(stored.user.id);
+      const hydrated: AuthSession = {
+        ...stored,
+        user: mergeStoredProfile(stored.user, profile),
+      };
+      setSession(hydrated);
       try {
-        const refreshed = await refreshGoogleProfile(stored.user);
+        const refreshed = await refreshGoogleProfile(hydrated.user);
         if (refreshed) {
-          setSession(refreshed);
-          await saveSession(refreshed);
+          const merged = {
+            ...refreshed,
+            user: mergeStoredProfile(refreshed.user, {
+              userId: hydrated.user.id,
+              firstName: hydrated.user.firstName,
+              lastName: hydrated.user.lastName,
+              dateOfBirth: hydrated.user.dateOfBirth,
+              fullName: hydrated.user.fullName || hydrated.user.name,
+              travelId: hydrated.user.travelId,
+              travelIdCreatedAt: hydrated.user.travelIdCreatedAt,
+              updatedAt: new Date().toISOString(),
+            }),
+          };
+          setSession(merged);
+          await saveSession(merged);
+          await saveUserProfile(merged.user);
+        } else if (profile) {
+          await saveSession(hydrated);
         }
       } catch {
         // Keep cached profile if offline / silent sign-in unavailable
@@ -69,34 +96,32 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const commit = useCallback(async (next: AuthSession | null) => {
     setSession(next);
     await saveSession(next);
+    if (next?.user?.id) {
+      await saveUserProfile(next.user);
+    }
   }, []);
 
   const loginWithGoogle = useCallback(async () => {
     const next = await signInWithGoogleAccount();
-    // Keep details if same Google user re-signs in after partial session
-    if (
-      session?.user?.id === next.user.id &&
-      (session.user.travelId || session.user.firstName)
-    ) {
-      await commit({
-        ...next,
-        user: {
-          ...next.user,
-          firstName: session.user.firstName ?? next.user.firstName,
-          lastName: session.user.lastName ?? next.user.lastName,
-          dateOfBirth: session.user.dateOfBirth ?? next.user.dateOfBirth,
-          travelId: session.user.travelId ?? next.user.travelId,
-          travelIdCreatedAt:
-            session.user.travelIdCreatedAt ?? next.user.travelIdCreatedAt,
-          fullName:
-            [session.user.firstName, session.user.lastName]
-              .filter(Boolean)
-              .join(' ') || next.user.fullName,
-        },
+    const stored = await loadUserProfile(next.user.id);
+    // Prefer in-memory session for same user, then durable profile store
+    let mergedUser = mergeStoredProfile(next.user, stored);
+    if (session?.user?.id === next.user.id) {
+      mergedUser = mergeStoredProfile(mergedUser, {
+        userId: session.user.id,
+        firstName: session.user.firstName,
+        lastName: session.user.lastName,
+        dateOfBirth: session.user.dateOfBirth,
+        fullName: session.user.fullName || session.user.name,
+        travelId: session.user.travelId,
+        travelIdCreatedAt: session.user.travelIdCreatedAt,
+        updatedAt: new Date().toISOString(),
       });
-      return;
     }
-    await commit(next);
+    await commit({
+      ...next,
+      user: mergedUser,
+    });
   }, [commit, session]);
 
   const refreshProfile = useCallback(async () => {

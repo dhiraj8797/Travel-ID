@@ -1,6 +1,7 @@
 import * as Notifications from 'expo-notifications';
 import { Platform, Vibration } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { areAlarmNotificationsEnabled } from './appPrefs';
 
 const ALARM_KEY = 'travelid.arrivalAlarms.v1';
 const CHANNEL_ID = 'arrival-alerts';
@@ -25,6 +26,8 @@ type AlarmRecord = {
   notificationId?: string;
   firedAt?: string;
   etaIso?: string;
+  /** User stopped this firing — do not auto-restart until re-armed. */
+  silenced?: boolean;
 };
 
 let soundingTicketId: string | null = null;
@@ -52,6 +55,8 @@ export async function ensureAlarmPermissions(): Promise<boolean> {
       sound: 'arrival_alarm',
       vibrationPattern: [0, 500, 250, 500, 250, 500],
       lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+      // User can stop from the app; don't force ongoing forever
+      enableVibrate: true,
     });
   }
 
@@ -77,27 +82,61 @@ export async function isArrivalAlarmArmed(ticketId: string): Promise<boolean> {
   return Boolean(map[ticketId]);
 }
 
+async function cancelNotification(id?: string) {
+  if (!id) return;
+  try {
+    await Notifications.cancelScheduledNotificationAsync(id);
+  } catch {
+    // ignore
+  }
+}
+
 /**
- * Arm a 5-minute-before arrival alert for the destination station.
+ * Arm a 20-minute-before arrival alert for the destination station.
  * Re-schedules when ETA changes on live refresh.
  */
-export async function armArrivalAlarm(input: {
-  ticketId: string;
-  trainNumber?: string;
-  pnr?: string;
-  stationName: string;
-  stationCode?: string;
-  eta: Date;
-  minutesBefore?: number;
-}): Promise<{ ok: boolean; reason?: string }> {
+export async function armArrivalAlarm(
+  input: {
+    ticketId: string;
+    trainNumber?: string;
+    pnr?: string;
+    stationName: string;
+    stationCode?: string;
+    eta: Date;
+    minutesBefore?: number;
+  },
+  opts?: { fromUser?: boolean; allowFireNow?: boolean }
+): Promise<{ ok: boolean; reason?: string }> {
   ensureNotificationHandler();
-  const minutesBefore = input.minutesBefore ?? 5;
+
+  if (!(await areAlarmNotificationsEnabled())) {
+    await stopArrivalAlarmSound();
+    return { ok: false, reason: 'disabled' };
+  }
+
+  const minutesBefore = input.minutesBefore ?? 20;
   const triggerAt = new Date(input.eta.getTime() - minutesBefore * 60_000);
   const map = await loadAlarms();
   const existing = map[input.ticketId];
+  const fromUser = Boolean(opts?.fromUser);
+  const allowFireNow = opts?.allowFireNow !== false;
 
-  if (existing?.firedAt && existing.etaIso === input.eta.toISOString()) {
+  // User re-arming clears a previous silence
+  const silenced = fromUser ? false : Boolean(existing?.silenced);
+
+  if (existing?.firedAt && existing.etaIso === input.eta.toISOString() && !fromUser) {
     return { ok: true, reason: 'already-fired' };
+  }
+
+  if (silenced && !fromUser) {
+    map[input.ticketId] = {
+      ...existing!,
+      ticketId: input.ticketId,
+      etaIso: input.eta.toISOString(),
+      silenced: true,
+    };
+    await saveAlarms(map);
+    return { ok: true, reason: 'silenced' };
   }
 
   const allowed = await ensureAlarmPermissions();
@@ -105,45 +144,53 @@ export async function armArrivalAlarm(input: {
     map[input.ticketId] = {
       ticketId: input.ticketId,
       etaIso: input.eta.toISOString(),
+      silenced: false,
     };
     await saveAlarms(map);
     return { ok: true, reason: 'local-only' };
   }
 
-  if (existing?.notificationId) {
-    try {
-      await Notifications.cancelScheduledNotificationAsync(existing.notificationId);
-    } catch {
-      // ignore
-    }
-  }
+  await cancelNotification(existing?.notificationId);
 
   const now = Date.now();
   if (triggerAt.getTime() <= now) {
-    await Notifications.scheduleNotificationAsync({
-      content: {
-        title: 'Train arriving soon',
-        body: `${input.trainNumber || 'Your train'} · PNR ${input.pnr || '—'} arrives ${input.stationName}${
-          input.stationCode ? ` (${input.stationCode})` : ''
-        } in about ${minutesBefore} min.`,
-        sound: 'arrival_alarm.wav',
-        ...(Platform.OS === 'android' ? { channelId: CHANNEL_ID } : {}),
-      },
-      trigger: null,
-    });
+    if (silenced) {
+      map[input.ticketId] = {
+        ticketId: input.ticketId,
+        etaIso: input.eta.toISOString(),
+        firedAt: existing?.firedAt || new Date().toISOString(),
+        silenced: true,
+      };
+      await saveAlarms(map);
+      return { ok: true, reason: 'silenced' };
+    }
+
+    if (!allowFireNow) {
+      // Already inside the alert window — keep armed; tick plays foreground sound
+      map[input.ticketId] = {
+        ticketId: input.ticketId,
+        etaIso: input.eta.toISOString(),
+        firedAt: existing?.firedAt,
+        silenced: false,
+      };
+      await saveAlarms(map);
+      return { ok: true, reason: 'window-open' };
+    }
+
     map[input.ticketId] = {
       ticketId: input.ticketId,
       etaIso: input.eta.toISOString(),
       firedAt: new Date().toISOString(),
+      silenced: false,
     };
     await saveAlarms(map);
-    await playArrivalAlarmSound(input.ticketId);
+    await playArrivalAlarmSound(input.ticketId, { notify: true });
     return { ok: true, reason: 'fired-now' };
   }
 
   const notificationId = await Notifications.scheduleNotificationAsync({
     content: {
-      title: 'Train arriving in 5 minutes',
+      title: 'Train arriving in 20 minutes',
       body: `${input.trainNumber || 'Your train'} · PNR ${input.pnr || '—'} → ${input.stationName}${
         input.stationCode ? ` (${input.stationCode})` : ''
       }. Get ready.`,
@@ -161,45 +208,94 @@ export async function armArrivalAlarm(input: {
     ticketId: input.ticketId,
     notificationId,
     etaIso: input.eta.toISOString(),
+    silenced: false,
   };
   await saveAlarms(map);
   return { ok: true };
 }
 
+export async function disarmAllArrivalAlarms() {
+  const map = await loadAlarms();
+  for (const record of Object.values(map)) {
+    await cancelNotification(record.notificationId);
+  }
+  await saveAlarms({});
+  await stopArrivalAlarmSound();
+}
+
 export async function disarmArrivalAlarm(ticketId: string) {
   const map = await loadAlarms();
   const existing = map[ticketId];
-  if (existing?.notificationId) {
-    try {
-      await Notifications.cancelScheduledNotificationAsync(existing.notificationId);
-    } catch {
-      // ignore
-    }
-  }
+  await cancelNotification(existing?.notificationId);
   delete map[ticketId];
   await saveAlarms(map);
-  if (soundingTicketId === ticketId) {
-    await stopArrivalAlarmSound();
-  }
+  await stopArrivalAlarmSound();
 }
 
-/** Foreground alert: vibrating pulse + notification sound (no expo-av). */
-export async function playArrivalAlarmSound(ticketId: string) {
+/**
+ * User stopped the ringing alarm — must not restart on the next live tick.
+ */
+export async function silenceArrivalAlarm(ticketId: string) {
+  const map = await loadAlarms();
+  const existing = map[ticketId];
+  if (existing) {
+    await cancelNotification(existing.notificationId);
+    map[ticketId] = {
+      ...existing,
+      notificationId: undefined,
+      silenced: true,
+      firedAt: existing.firedAt || new Date().toISOString(),
+    };
+    await saveAlarms(map);
+  }
+  await stopArrivalAlarmSound();
+}
+
+/** Foreground alert: short vibrate cycles (stoppable). */
+export async function playArrivalAlarmSound(
+  ticketId: string,
+  opts?: { notify?: boolean }
+) {
+  if (!(await areAlarmNotificationsEnabled())) {
+    await stopArrivalAlarmSound();
+    return;
+  }
+
+  const map = await loadAlarms();
+  if (map[ticketId]?.silenced) {
+    await stopArrivalAlarmSound();
+    return;
+  }
+
   soundingTicketId = ticketId;
-  const pattern = [0, 600, 300, 600, 300, 900];
-  Vibration.vibrate(pattern, true);
-  if (vibrateTimer) clearInterval(vibrateTimer);
-  // Keep pattern alive on some OEMs that stop after one cycle
+  // Finite pattern — do NOT pass repeat=true (that was unstoppable on some OEMs)
+  const pattern = [0, 600, 300, 600, 300, 900, 400, 600];
+  if (vibrateTimer) {
+    clearInterval(vibrateTimer);
+    vibrateTimer = null;
+  }
+  Vibration.cancel();
+  Vibration.vibrate(pattern, false);
+
   vibrateTimer = setInterval(() => {
-    Vibration.vibrate(pattern, true);
-  }, 4000);
+    if (soundingTicketId !== ticketId) {
+      if (vibrateTimer) clearInterval(vibrateTimer);
+      vibrateTimer = null;
+      Vibration.cancel();
+      return;
+    }
+    Vibration.vibrate(pattern, false);
+  }, 4500);
+
+  if (opts?.notify === false) return;
 
   try {
     ensureNotificationHandler();
+    // One banner only — avoid stacking sound every tick
     await Notifications.scheduleNotificationAsync({
       content: {
         title: 'Train arriving soon',
-        body: 'Tap Travel ID · get ready at your station',
+        body: 'Open Travel ID and tap Stop alarm',
         sound: 'arrival_alarm.wav',
         ...(Platform.OS === 'android' ? { channelId: CHANNEL_ID } : {}),
       },
@@ -215,8 +311,11 @@ export async function stopArrivalAlarmSound() {
     clearInterval(vibrateTimer);
     vibrateTimer = null;
   }
-  Vibration.cancel();
   soundingTicketId = null;
+  Vibration.cancel();
+  // Extra cancel on next frame for OEMs that ignore the first cancel
+  setTimeout(() => Vibration.cancel(), 50);
+  setTimeout(() => Vibration.cancel(), 200);
 }
 
 export function isAlarmSoundPlaying(ticketId?: string): boolean {
@@ -226,7 +325,7 @@ export function isAlarmSoundPlaying(ticketId?: string): boolean {
 
 /**
  * Call on each live refresh while alarm is armed.
- * Alerts when within the 5-minute window (app foreground).
+ * Alerts when within the 20-minute window (app foreground).
  */
 export async function tickArrivalAlarm(input: {
   ticketId: string;
@@ -237,28 +336,61 @@ export async function tickArrivalAlarm(input: {
   stationName: string;
   stationCode?: string;
   minutesBefore?: number;
-}): Promise<'idle' | 'armed' | 'sounding' | 'disarmed'> {
-  const map = await loadAlarms();
-  if (!map[input.ticketId]) return 'disarmed';
+}): Promise<'idle' | 'armed' | 'sounding' | 'silenced' | 'disarmed'> {
+  if (!(await areAlarmNotificationsEnabled())) {
+    await stopArrivalAlarmSound();
+    return 'disarmed';
+  }
 
-  const minutesBefore = input.minutesBefore ?? 5;
+  const map = await loadAlarms();
+  const record = map[input.ticketId];
+  if (!record) return 'disarmed';
+
+  if (record.silenced) {
+    await stopArrivalAlarmSound();
+    return 'silenced';
+  }
+
+  const minutesBefore = input.minutesBefore ?? 20;
   const mins = input.minutesUntilArrival;
 
   if (input.eta) {
-    await armArrivalAlarm({
-      ticketId: input.ticketId,
-      trainNumber: input.trainNumber,
-      pnr: input.pnr,
-      stationName: input.stationName,
-      stationCode: input.stationCode,
-      eta: input.eta,
-      minutesBefore,
-    });
+    await armArrivalAlarm(
+      {
+        ticketId: input.ticketId,
+        trainNumber: input.trainNumber,
+        pnr: input.pnr,
+        stationName: input.stationName,
+        stationCode: input.stationCode,
+        eta: input.eta,
+        minutesBefore,
+      },
+      { fromUser: false, allowFireNow: false }
+    );
+  }
+
+  // Re-read after schedule update
+  const latest = (await loadAlarms())[input.ticketId];
+  if (!latest) return 'disarmed';
+  if (latest.silenced) {
+    await stopArrivalAlarmSound();
+    return 'silenced';
   }
 
   if (typeof mins === 'number' && mins <= minutesBefore && mins > -15) {
     if (!isAlarmSoundPlaying(input.ticketId)) {
-      await playArrivalAlarmSound(input.ticketId);
+      await playArrivalAlarmSound(input.ticketId, {
+        // Notify once when first entering the window
+        notify: !latest.firedAt,
+      });
+      const next = await loadAlarms();
+      if (next[input.ticketId]) {
+        next[input.ticketId] = {
+          ...next[input.ticketId],
+          firedAt: next[input.ticketId].firedAt || new Date().toISOString(),
+        };
+        await saveAlarms(next);
+      }
     }
     return 'sounding';
   }

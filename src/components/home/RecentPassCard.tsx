@@ -4,6 +4,7 @@ import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import QRCode from 'react-native-qrcode-svg';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ticket } from '../../types/ticket';
+import { hasOfficialMetroQr } from '../../metro';
 import { buildQrPayload, cityName } from '../../utils/ticketFormat';
 import { getPassPhase } from '../../utils/passTime';
 import { colors, radii } from '../../theme';
@@ -16,10 +17,36 @@ type Props = {
 export function RecentPassCard({ ticket, onPress }: Props) {
   const isBus = ticket.kind === 'bus';
   const isFlight = ticket.kind === 'flight';
-  const accent = isBus ? colors.orange : isFlight ? colors.purple : colors.blue;
+  const isHotel = ticket.kind === 'hotel';
+  const isMetro = ticket.kind === 'metro';
+  const accent = isHotel
+    ? colors.hotel
+    : isMetro
+      ? colors.metro
+      : isBus
+        ? colors.orange
+        : isFlight
+          ? colors.purple
+          : colors.blue;
   const pnr = ticket.pnr || ticket.bookingId || '—';
   const qr = ticket.originalQrValue?.trim() || buildQrPayload(ticket);
   const phase = getPassPhase(ticket);
+  const typeLabel = isHotel
+    ? 'HOTEL'
+    : isMetro
+      ? 'METRO'
+      : isBus
+        ? 'BUS'
+        : isFlight
+          ? 'FLIGHT'
+          : 'TRAIN';
+  const left =
+    isHotel
+      ? cityName(ticket.from)
+      : cityName(ticket.fromCode || ticket.from);
+  const right = isHotel
+    ? ticket.hotelName || ticket.to || ticket.operator
+    : cityName(ticket.toCode || ticket.to);
 
   return (
     <Pressable onPress={onPress} style={({ pressed }) => pressed && { opacity: 0.94 }}>
@@ -31,11 +58,21 @@ export function RecentPassCard({ ticket, onPress }: Props) {
       >
         <View style={styles.rail}>
           <MaterialCommunityIcons
-            name={isBus ? 'bus' : isFlight ? 'airplane' : 'train'}
+            name={
+              isHotel
+                ? 'office-building'
+                : isMetro
+                  ? 'subway-variant'
+                  : isBus
+                    ? 'bus'
+                    : isFlight
+                      ? 'airplane'
+                      : 'train'
+            }
             size={34}
             color="#fff"
           />
-          <Text style={styles.type}>{isBus ? 'BUS' : isFlight ? 'FLIGHT' : 'TRAIN'}</Text>
+          <Text style={styles.type}>{typeLabel}</Text>
           {phase === 'ongoing' ? (
             <View style={styles.phasePill}>
               <Text style={styles.phaseText}>ONGOING</Text>
@@ -49,18 +86,45 @@ export function RecentPassCard({ ticket, onPress }: Props) {
 
         <View style={styles.body}>
           <Text style={styles.operator} numberOfLines={1}>
-            {ticket.operator}
+            {isHotel
+              ? ticket.hotelName || ticket.operator
+              : isMetro
+                ? ticket.bookingPlatform || ticket.operator
+                : ticket.operator}
           </Text>
           <View style={styles.routeRow}>
-            <Text style={styles.city}>{cityName(ticket.fromCode || ticket.from)}</Text>
-            <Ionicons name="arrow-forward" size={14} color="#fff" style={{ marginHorizontal: 8 }} />
-            <Text style={styles.city}>{cityName(ticket.toCode || ticket.to)}</Text>
+            <Text style={styles.city} numberOfLines={1}>
+              {left}
+            </Text>
+            <Ionicons
+              name={isHotel ? 'bed-outline' : 'arrow-forward'}
+              size={14}
+              color="#fff"
+              style={{ marginHorizontal: 8 }}
+            />
+            <Text style={styles.city} numberOfLines={1}>
+              {right}
+            </Text>
           </View>
           <Text style={styles.meta}>
+            {isHotel ? 'In ' : ''}
             {ticket.departureDate} · {ticket.departureTime}
-            {ticket.arrivalTime ? ` → ${ticket.arrivalTime}` : ''}
+            {ticket.arrivalTime
+              ? isHotel
+                ? ` → out ${ticket.arrivalTime}`
+                : ` → ${ticket.arrivalTime}`
+              : ''}
           </Text>
-          <Text style={styles.pnr}>PNR: {pnr}</Text>
+          <Text style={styles.pnr}>
+            {isHotel
+              ? 'CONF'
+              : isMetro
+                ? hasOfficialMetroQr(ticket)
+                  ? 'GATE QR'
+                  : 'GUIDE'
+                : 'PNR'}
+            : {pnr}
+          </Text>
         </View>
 
         <View style={styles.qrBox}>
@@ -78,76 +142,72 @@ const styles = StyleSheet.create({
     borderRadius: radii.lg,
     overflow: 'hidden',
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.14)',
+    borderColor: 'rgba(255,255,255,0.08)',
   },
   rail: {
-    width: 88,
+    width: 72,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(255,255,255,0.07)',
+    paddingVertical: 12,
     gap: 6,
   },
   type: {
-    fontFamily: 'Outfit_700Bold',
+    fontFamily: 'DMSans_700Bold',
+    fontSize: 10,
     color: '#fff',
-    fontSize: 13,
+    letterSpacing: 0.8,
   },
   phasePill: {
-    marginTop: 2,
+    marginTop: 4,
+    backgroundColor: 'rgba(31,199,122,0.9)',
     paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: 6,
-    backgroundColor: 'rgba(0,230,118,0.28)',
   },
-  phasePast: {
-    backgroundColor: 'rgba(255,255,255,0.14)',
-  },
+  phasePast: { backgroundColor: 'rgba(174,187,208,0.35)' },
   phaseText: {
-    fontFamily: 'Outfit_700Bold',
+    fontFamily: 'DMSans_700Bold',
     fontSize: 8,
     color: '#fff',
-    letterSpacing: 0.4,
   },
   body: {
     flex: 1,
-    padding: 14,
     justifyContent: 'center',
+    paddingVertical: 14,
+    paddingRight: 8,
   },
   operator: {
-    fontFamily: 'DMSans_700Bold',
+    fontFamily: 'Outfit_600SemiBold',
+    fontSize: 13,
     color: 'rgba(255,255,255,0.85)',
-    fontSize: 12,
-    marginBottom: 4,
+    marginBottom: 6,
   },
   routeRow: {
     flexDirection: 'row',
     alignItems: 'center',
+    marginBottom: 6,
   },
   city: {
+    flexShrink: 1,
     fontFamily: 'Outfit_700Bold',
-    color: '#fff',
     fontSize: 16,
+    color: '#fff',
   },
   meta: {
     fontFamily: 'DMSans_400Regular',
-    color: 'rgba(255,255,255,0.8)',
-    fontSize: 12,
-    marginTop: 4,
+    fontSize: 11,
+    color: 'rgba(255,255,255,0.75)',
+    marginBottom: 4,
   },
   pnr: {
-    fontFamily: 'Outfit_700Bold',
-    color: '#fff',
+    fontFamily: 'DMSans_500Medium',
     fontSize: 11,
-    marginTop: 8,
+    color: 'rgba(255,255,255,0.9)',
   },
   qrBox: {
-    margin: 14,
-    width: 70,
-    height: 70,
-    borderRadius: 14,
-    backgroundColor: '#fff',
+    width: 78,
     alignItems: 'center',
     justifyContent: 'center',
-    alignSelf: 'center',
+    backgroundColor: 'rgba(255,255,255,0.12)',
   },
 });

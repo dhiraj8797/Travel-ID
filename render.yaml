@@ -1,0 +1,23 @@
+# Travel ID live-data proxy — Deploy from Render Dashboard:
+#   New → Blueprint → connect this repo → apply
+# Or: https://dashboard.render.com/select-repo?type=blueprint
+services:
+  - type: web
+    name: travelid-api-proxy
+    runtime: node
+    rootDir: server
+    plan: free
+    buildCommand: npm install --omit=dev
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: RAILRADAR_API_KEY
+        sync: false
+      - key: RAILRADAR_API_KEY_BACKUP
+        sync: false
+      - key: AVIATIONSTACK_API_KEY
+        sync: false
+      - key: APP_PROXY_TOKEN
+        sync: false

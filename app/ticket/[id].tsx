@@ -21,9 +21,25 @@ export default function TicketScreen() {
   }
 
   const nextKind =
-    ticket.kind === 'bus' ? 'rail' : ticket.kind === 'rail' ? 'flight' : 'bus';
+    ticket.kind === 'bus'
+      ? 'rail'
+      : ticket.kind === 'rail'
+        ? 'flight'
+        : ticket.kind === 'flight'
+          ? 'hotel'
+          : ticket.kind === 'hotel'
+            ? 'metro'
+            : 'bus';
   const nextLabel =
-    ticket.kind === 'bus' ? 'Train' : ticket.kind === 'rail' ? 'Flight' : 'Bus';
+    ticket.kind === 'bus'
+      ? 'Train'
+      : ticket.kind === 'rail'
+        ? 'Flight'
+        : ticket.kind === 'flight'
+          ? 'Hotel'
+          : ticket.kind === 'hotel'
+            ? 'Metro'
+            : 'Bus';
 
   const openMenu = () => {
     Alert.alert('Pass options', undefined, [
@@ -40,7 +56,25 @@ export default function TicketScreen() {
                   : 'Bus Pass'
                 : nextKind === 'flight'
                   ? ticket.flightNumber || ticket.operator || 'Flight Pass'
-                  : ticket.trainName || 'Train Pass',
+                  : nextKind === 'hotel'
+                    ? ticket.hotelName || ticket.to || ticket.operator || 'Hotel Pass'
+                    : nextKind === 'metro'
+                      ? `${ticket.from} → ${ticket.to}`
+                      : ticket.trainName || 'Train Pass',
+            ...(nextKind === 'hotel'
+              ? {
+                  hotelName: ticket.hotelName || ticket.to || ticket.operator,
+                  departureTime: ticket.departureTime || '14:00',
+                  arrivalTime: ticket.arrivalTime || '11:00',
+                }
+              : {}),
+            ...(nextKind === 'metro'
+              ? {
+                  operator: ticket.operator || 'BMRCL',
+                  bookingPlatform: ticket.bookingPlatform || 'Namma Metro',
+                  metroNetworkId: ticket.metroNetworkId || 'blr',
+                }
+              : {}),
           });
         },
       },

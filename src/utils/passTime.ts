@@ -1,5 +1,9 @@
-import { Ticket } from '../types/ticket';
-import { istTodayIso, toJourneyDateIso } from '../services/railRadar';
+import { ParsedTicketDraft, Ticket } from '../types/ticket';
+import {
+  formatJourneyDateLabel,
+  istTodayIso,
+  toJourneyDateIso,
+} from '../services/railRadar';
 
 export type PassPhase = 'upcoming' | 'ongoing' | 'past';
 
@@ -16,6 +20,12 @@ function addDaysIso(iso: string, days: number): string {
   const [y, m, d] = iso.split('-').map(Number);
   const dt = new Date(Date.UTC(y, m - 1, d + days));
   return dt.toISOString().slice(0, 10);
+}
+
+function daysBetweenIso(a: string, b: string): number {
+  const ta = Date.parse(`${a}T12:00:00Z`);
+  const tb = Date.parse(`${b}T12:00:00Z`);
+  return Math.round((tb - ta) / 86_400_000);
 }
 
 function stampAddMinutes(stamp: number, mins: number): number {
@@ -88,8 +98,79 @@ function estimateJourneyMinutes(ticket: Ticket): number {
     if (colon) return Number(colon[1]) * 60 + Number(colon[2]);
   }
   if (ticket.kind === 'flight') return 3 * 60;
+  if (ticket.kind === 'bus') return 10 * 60;
+  if (ticket.kind === 'hotel') return 24 * 60; // default 1 night
+  if (ticket.kind === 'metro') return 90; // typical metro trip + buffer
+  // Long-distance trains + delay buffer when arrival clock is missing
+  return 24 * 60;
+}
+
+/**
+ * After scheduled arrival, keep the pass Ongoing this long so delayed
+ * trains/buses/flights don't jump to Past while still en route.
+ */
+function postArrivalGraceMinutes(ticket: Ticket): number {
+  if (ticket.kind === 'flight') return 4 * 60;
   if (ticket.kind === 'bus') return 8 * 60;
-  return 12 * 60; // rail default
+  if (ticket.kind === 'hotel') return 6 * 60; // late checkout buffer
+  if (ticket.kind === 'metro') return 45;
+  return 18 * 60; // rail — IRCTC delays often run many hours
+}
+
+function isCompletedStatus(status?: string): boolean {
+  return /^(completed|travelled|traveled|flown|used|past)$/i.test(
+    String(status || '').trim()
+  );
+}
+
+function flightLooksLanded(ticket: Ticket): boolean {
+  const s = String(ticket.flightStatus || '').toLowerCase();
+  return /land|arriv|complet|flown|divert/.test(s);
+}
+
+/**
+ * Boarding-pass barcodes often omit the year. If a flight date sits far in
+ * the future, roll the year back to the most recent past (archive-friendly).
+ */
+export function coerceFlightArchiveDate<T extends Ticket | ParsedTicketDraft>(
+  ticket: T
+): T {
+  if (ticket.kind !== 'flight') return ticket;
+  const iso = toJourneyDateIso(ticket.departureDate);
+  if (!iso) return ticket;
+  const today = istTodayIso();
+  const ahead = daysBetweenIso(today, iso);
+  // Real upcoming boarding passes are usually within ~6 weeks
+  if (ahead <= 45) return ticket;
+
+  let y = Number(iso.slice(0, 4));
+  const md = iso.slice(4); // -MM-DD
+  let fixed = iso;
+  while (y > 2015) {
+    y -= 1;
+    const candidate = `${y}${md}`;
+    if (daysBetweenIso(today, candidate) <= 0) {
+      fixed = candidate;
+      break;
+    }
+    fixed = candidate;
+  }
+
+  if (fixed === iso) return ticket;
+  const label = formatJourneyDateLabel(fixed) || fixed;
+  const arrIso = toJourneyDateIso(ticket.arrivalDate);
+  let nextArrival = ticket.arrivalDate;
+  if (arrIso) {
+    const delta = daysBetweenIso(iso, arrIso);
+    const fixedArr = addDaysIso(fixed, Math.max(0, delta));
+    nextArrival = formatJourneyDateLabel(fixedArr) || fixedArr;
+  }
+
+  return {
+    ...ticket,
+    departureDate: label,
+    arrivalDate: nextArrival,
+  };
 }
 
 /**
@@ -131,7 +212,9 @@ export function ticketArrivalStamp(ticket: Ticket): number | null {
   }
 
   const [y, m, d] = arrIso.split('-').map(Number);
-  if (!y || !m || !d) return stampAddMinutes(depStamp, estimateJourneyMinutes(ticket));
+  if (!y || !m || !d) {
+    return stampAddMinutes(depStamp, estimateJourneyMinutes(ticket));
+  }
   return packStamp(y, m, d, arrMins);
 }
 
@@ -139,24 +222,129 @@ export function ticketTravelDateIso(ticket: Ticket): string | undefined {
   return toJourneyDateIso(ticket.departureDate);
 }
 
-/** upcoming → before dep · ongoing → dep…arr · past → after arr */
-export function getPassPhase(ticket: Ticket): PassPhase {
+/**
+ * Phase from travel clocks only (ignores journeyCompleted / bookingStatus).
+ * Used to undo false auto-complete when a delayed train is still running.
+ */
+export function getSchedulePassPhase(ticket: Ticket): PassPhase {
   const now = istNowStamp();
+  const today = istTodayIso();
+  const depIso = toJourneyDateIso(ticket.departureDate);
+  const endIso =
+    toJourneyDateIso(ticket.arrivalDate) || depIso;
+
+  // Travel calendar date(s) finished → always past (live → Completed)
+  if (endIso && endIso < today) return 'past';
+  if (depIso && depIso < today && ticket.kind === 'flight') return 'past';
+
+  if (ticket.kind === 'flight' && flightLooksLanded(ticket)) return 'past';
+
+  const yearHint = String(ticket.departureDate || '').match(/\b(20\d{2})\b/);
+  if (yearHint) {
+    const y = Number(yearHint[1]);
+    const nowY = Number(today.slice(0, 4));
+    if (Number.isFinite(y) && y < nowY) return 'past';
+  }
+
   const dep = ticketTravelStamp(ticket);
-  if (dep == null) return 'upcoming';
+  if (dep == null) {
+    // No parseable date — if year is old, past; else don't force completed
+    if (yearHint) {
+      const y = Number(yearHint[1]);
+      const nowY = Math.floor(now / 1_440 / 10_000);
+      if (Number.isFinite(y) && y < nowY) return 'past';
+    }
+    return 'upcoming';
+  }
 
   if (now < dep) return 'upcoming';
 
-  const arr = ticketArrivalStamp(ticket);
-  if (arr == null) {
-    // Shouldn't happen — arrival stamp always estimates — but be safe
-    return now < stampAddMinutes(dep, estimateJourneyMinutes(ticket))
-      ? 'ongoing'
-      : 'past';
+  // Flights with no real departure clock (BCBP often has --:--) stay ongoing
+  // for the whole travel day; Completed kicks in when the date rolls over.
+  if (
+    ticket.kind === 'flight' &&
+    depIso === today &&
+    parseClockMinutes(ticket.departureTime) == null
+  ) {
+    return 'ongoing';
   }
 
-  if (now < arr) return 'ongoing';
+  const arr =
+    ticketArrivalStamp(ticket) ??
+    stampAddMinutes(dep, estimateJourneyMinutes(ticket));
+  const ongoingUntil = stampAddMinutes(arr, postArrivalGraceMinutes(ticket));
+
+  if (now < ongoingUntil) return 'ongoing';
   return 'past';
+}
+
+/**
+ * True once the wallet should stop live updates:
+ * travel/arrival calendar day is over, or schedule phase is past.
+ */
+export function isLiveWindowOver(ticket: Ticket): boolean {
+  return getPassPhase(ticket) === 'past';
+}
+
+/** upcoming → before dep · ongoing → dep…arr(+grace) · past → after grace */
+export function getPassPhase(ticket: Ticket): PassPhase {
+  if (ticket.journeyCompleted) return 'past';
+  if (isCompletedStatus(ticket.bookingStatus)) return 'past';
+  return getSchedulePassPhase(ticket);
+}
+
+/**
+ * Undo auto-complete when schedule still says the trip is active
+ * (delayed train still en route after scheduled arrival).
+ * Flights are never un-completed — old boarding passes stay archived.
+ */
+export function repairFalseCompletedFlags<T extends Ticket | ParsedTicketDraft>(
+  ticket: T
+): T {
+  if (ticket.kind === 'flight') return ticket;
+
+  const markedDone =
+    Boolean(ticket.journeyCompleted) || isCompletedStatus(ticket.bookingStatus);
+  if (!markedDone) return ticket;
+  if (getSchedulePassPhase(ticket as Ticket) === 'past') return ticket;
+
+  return {
+    ...ticket,
+    journeyCompleted: false,
+    bookingStatus: isCompletedStatus(ticket.bookingStatus)
+      ? 'Confirmed'
+      : ticket.bookingStatus,
+  };
+}
+
+/**
+ * Mark archived / finished trips so UI + live tracking treat them as past.
+ * Only when schedule phase is past (includes delay grace) — never while Ongoing.
+ */
+export function applyCompletedIfPast<T extends Ticket | ParsedTicketDraft>(
+  ticket: T
+): T {
+  const dated =
+    ticket.kind === 'flight' ? coerceFlightArchiveDate(ticket) : ticket;
+  const repaired = repairFalseCompletedFlags(dated);
+  if (repaired.journeyCompleted) return repaired;
+  if (getSchedulePassPhase(repaired as Ticket) !== 'past') return repaired;
+  return {
+    ...repaired,
+    journeyCompleted: true,
+    bookingStatus:
+      repaired.bookingStatus &&
+      !/confirm|booked|pending/i.test(repaired.bookingStatus)
+        ? repaired.bookingStatus
+        : 'Completed',
+    flightStatus:
+      repaired.kind === 'flight'
+        ? repaired.flightStatus &&
+          !/schedul|on time|on-time/i.test(String(repaired.flightStatus))
+          ? repaired.flightStatus
+          : 'Completed'
+        : repaired.flightStatus,
+  };
 }
 
 /** Upcoming = not departed yet (IST). */

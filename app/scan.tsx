@@ -6,6 +6,13 @@ import { useAuth } from '../src/auth/AuthContext';
 import { promptWalletSignIn } from '../src/auth/requireWalletAccount';
 import { enrichDraftWithPnr, parseIncomingPayload } from '../src/parsers';
 import { pickBestBarcodePayload } from '../src/parsers/bcbp';
+import {
+  buildMetroQrImportDraft,
+  locateMetroCity,
+  looksLikeOpaqueMetroQr,
+  MetroNetworkId,
+} from '../src/metro';
+import * as Location from 'expo-location';
 import { setPendingDraft } from '../src/state/pendingDraft';
 import { colors, radii, spacing } from '../src/theme';
 
@@ -61,6 +68,38 @@ export default function ScanScreen() {
           }
 
           let draft = parseIncomingPayload(value, type);
+          // Opaque / encrypted metro QR: preserve payload, ask for stations on review
+          if (
+            (type === 'qr' || !type) &&
+            looksLikeOpaqueMetroQr(value) &&
+            draft.kind !== 'flight' &&
+            !/\bPNR\b/i.test(value)
+          ) {
+            let networkId: MetroNetworkId | undefined;
+            try {
+              const { status } = await Location.getForegroundPermissionsAsync();
+              if (status === 'granted') {
+                const pos = await Location.getCurrentPositionAsync({
+                  accuracy: Location.Accuracy.Balanced,
+                });
+                const hit = locateMetroCity(
+                  pos.coords.latitude,
+                  pos.coords.longitude
+                );
+                if (hit) networkId = hit.networkId;
+              }
+            } catch {
+              /* keep default */
+            }
+            draft = buildMetroQrImportDraft({
+              qrPayload: value,
+              networkId,
+            });
+            setPendingDraft(draft);
+            router.replace('/review');
+            return;
+          }
+
           // Never run rail PNR enrichment on flight boarding barcodes
           if (draft.kind !== 'flight') {
             draft = await enrichDraftWithPnr(draft);

@@ -24,6 +24,8 @@ export type RailRadarStop = {
   status?: string;
   platform?: string | null;
   distance?: number;
+  lat?: number;
+  lng?: number;
 };
 
 export type LiveTrainStatus = {
@@ -47,6 +49,8 @@ export type LiveTrainStatus = {
   previousHaltCode?: string;
   /** Human-readable live location for the pass UI */
   locationLabel?: string;
+  /** Rake order from live payload e.g. ENG-SLRD-S1-… */
+  coachPosition?: string;
   route: RailRadarStop[];
 };
 
@@ -113,9 +117,46 @@ function normalizeTrainNumber(trainNumber: string): string {
   return number;
 }
 
+/** Normalize coachPosition from string / array / alternate API field names. */
+export function normalizeCoachPositionRaw(raw: unknown): string | undefined {
+  if (raw == null) return undefined;
+  if (typeof raw === 'string') {
+    const s = raw.trim();
+    return s || undefined;
+  }
+  if (Array.isArray(raw)) {
+    const parts = raw
+      .map((item) => {
+        if (typeof item === 'string') return item.trim();
+        if (item && typeof item === 'object') {
+          const o = item as Record<string, unknown>;
+          return String(o.number || o.code || o.type || o.name || '').trim();
+        }
+        return '';
+      })
+      .filter(Boolean);
+    return parts.length ? parts.join('-') : undefined;
+  }
+  return undefined;
+}
+
+function pickCoachPositionFromTrain(
+  train?: Record<string, unknown> | null
+): string | undefined {
+  if (!train || typeof train !== 'object') return undefined;
+  return (
+    normalizeCoachPositionRaw(train.coachPosition) ||
+    normalizeCoachPositionRaw(train.coach_position) ||
+    normalizeCoachPositionRaw(train.composition) ||
+    normalizeCoachPositionRaw(train.rake) ||
+    normalizeCoachPositionRaw(train.rakeComposition) ||
+    normalizeCoachPositionRaw(train.coachComposition)
+  );
+}
+
 /** Short-lived in-memory cache so polling doesn't burn the RailRadar quota. */
 const liveCache = new Map<string, { at: number; value: LiveTrainStatus }>();
-const LIVE_CACHE_TTL_MS = 45_000;
+const LIVE_CACHE_TTL_MS = 20_000;
 
 /** Drop cached live payloads (e.g. after pull-to-refresh). */
 export function clearLiveTrainCache(trainNumber?: string) {
@@ -271,20 +312,38 @@ export function formatRailRadarError(error?: string | null): string {
 /** Convert ticket date strings like "18 Jul, 2026" / "18 Jul 2026" → YYYY-MM-DD */
 export function toJourneyDateIso(input?: string): string | undefined {
   if (!input) return undefined;
-  const trimmed = input.trim();
+  let trimmed = input.trim();
+  if (!trimmed) return undefined;
   if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
 
-  const dmy = trimmed.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})$/);
+  // "Sat, 18 Jul, 2026" / "Saturday 18 July 2026"
+  trimmed = trimmed
+    .replace(
+      /^(?:Mon(?:day)?|Tue(?:sday)?|Wed(?:nesday)?|Thu(?:rsday)?|Fri(?:day)?|Sat(?:urday)?|Sun(?:day)?)\s*,?\s+/i,
+      ''
+    )
+    .trim();
+
+  const expandYear = (raw: string): string | undefined => {
+    if (/^\d{4}$/.test(raw)) return raw;
+    if (/^\d{2}$/.test(raw)) {
+      const n = Number(raw);
+      // 00–99 → 2000–2099 (boarding passes are post-2000)
+      return String(2000 + n);
+    }
+    return undefined;
+  };
+
+  const dmy = trimmed.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);
   if (dmy) {
-    const day = dmy[1].padStart(2, '0');
-    const mon = dmy[2].padStart(2, '0');
-    return `${dmy[3]}-${mon}-${day}`;
+    const year = expandYear(dmy[3]);
+    if (year) {
+      const day = dmy[1].padStart(2, '0');
+      const mon = dmy[2].padStart(2, '0');
+      return `${year}-${mon}-${day}`;
+    }
   }
 
-  const m = trimmed.match(
-    /(\d{1,2})\s+([A-Za-z]{3,})[.,]?\s+(\d{4})/
-  );
-  if (!m) return undefined;
   const months: Record<string, string> = {
     jan: '01',
     feb: '02',
@@ -299,10 +358,32 @@ export function toJourneyDateIso(input?: string): string | undefined {
     nov: '11',
     dec: '12',
   };
-  const mon = months[m[2].slice(0, 3).toLowerCase()];
-  if (!mon) return undefined;
-  const day = m[1].padStart(2, '0');
-  return `${m[3]}-${mon}-${day}`;
+
+  // "18th Jul 2026" / "18 Jul, 2026" / "5 Nov 2023" / "5 Nov 23"
+  const dmyText = trimmed.match(
+    /(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]{3,})[.,]?\s+(\d{2,4})/
+  );
+  if (dmyText) {
+    const mon = months[dmyText[2].slice(0, 3).toLowerCase()];
+    const year = expandYear(dmyText[3]);
+    if (mon && year) {
+      return `${year}-${mon}-${dmyText[1].padStart(2, '0')}`;
+    }
+  }
+
+  // "Nov 5, 2023" / "November 5 2023" / "Nov 5, 23"
+  const mdyText = trimmed.match(
+    /([A-Za-z]{3,})\s+(\d{1,2})(?:st|nd|rd|th)?[.,]?\s+(\d{2,4})/
+  );
+  if (mdyText) {
+    const mon = months[mdyText[1].slice(0, 3).toLowerCase()];
+    const year = expandYear(mdyText[3]);
+    if (mon && year) {
+      return `${year}-${mon}-${mdyText[2].padStart(2, '0')}`;
+    }
+  }
+
+  return undefined;
 }
 
 /**
@@ -409,7 +490,10 @@ async function fetchLiveTrainStatusForDate(
   number: string,
   date?: string
 ): Promise<LiveTrainStatus> {
-  const params = new URLSearchParams({ haltsOnly: 'true' });
+  const params = new URLSearchParams({
+    haltsOnly: 'true',
+    includeCoordinates: 'true',
+  });
   if (date) params.set('date', date);
 
   const data = (await railGet(
@@ -446,20 +530,37 @@ async function fetchLiveTrainStatusForDate(
   const segmentProgress = normalizeSegmentProgress(
     data.currentLocation?.segmentProgress
   );
+  const trainLat = readCoord(
+    data.currentLocation?.lat ??
+      data.currentLocation?.latitude ??
+      data.currentLocation?.coordinates?.lat
+  );
+  const trainLng = readCoord(
+    data.currentLocation?.lng ??
+      data.currentLocation?.longitude ??
+      data.currentLocation?.coordinates?.lng
+  );
+  const nextFromRoute = nextHaltCode
+    ? route.find(
+        (s) => String(s.stationCode).toUpperCase() === nextHaltCode.toUpperCase()
+      )
+    : undefined;
+  const nextLat = readCoord(nextFromRoute?.lat ?? data.nextHalt?.lat);
+  const nextLng = readCoord(nextFromRoute?.lng ?? data.nextHalt?.lng);
+
   const kmToNext = computeKmToNextHalt({
     route,
     previousHaltCode,
     nextHaltCode,
-    previousDistance:
-      typeof data.previousHalt?.distance === 'number'
-        ? data.previousHalt.distance
-        : undefined,
-    nextDistance:
-      typeof data.nextHalt?.distance === 'number'
-        ? data.nextHalt.distance
-        : undefined,
+    currentStationCode: currentCode,
+    previousDistance: readHaltDistance(data.previousHalt),
+    nextDistance: readHaltDistance(data.nextHalt),
     segmentProgress,
     stopStatus,
+    trainLat,
+    trainLng,
+    nextLat,
+    nextLng,
   });
   const locationLabel = buildLocationLabel({
     runStatus: data.status,
@@ -472,6 +573,12 @@ async function fetchLiveTrainStatusForDate(
     nextHaltCode,
     segmentProgress,
   });
+
+  const speedRaw = data.currentLocation?.speedKmh ?? data.currentLocation?.speed;
+  const speedKmh =
+    typeof speedRaw === 'number' && Number.isFinite(speedRaw)
+      ? Math.max(0, Math.round(speedRaw))
+      : undefined;
 
   return {
     trainNumber: String(data.trainNumber || number),
@@ -486,12 +593,17 @@ async function fetchLiveTrainStatusForDate(
     currentStopStatus: data.currentLocation?.status,
     segmentProgress,
     kmToNext,
-    speedKmh: undefined,
+    speedKmh,
     nextHaltName,
     nextHaltCode,
     previousHaltName,
     previousHaltCode,
     locationLabel,
+    coachPosition: pickCoachPositionFromTrain(
+      data.train && typeof data.train === 'object'
+        ? (data.train as Record<string, unknown>)
+        : null
+    ),
     route,
   };
 }
@@ -508,7 +620,7 @@ export async function fetchTrainDetails(trainNumber: string): Promise<TrainDetai
     train?: Record<string, unknown>;
     route?: Array<Record<string, unknown>>;
   };
-  const train = data.train || {};
+  const train = (data.train || {}) as Record<string, unknown>;
   const source = (train.source || {}) as { code?: string; name?: string };
   const destination = (train.destination || {}) as { code?: string; name?: string };
   const route = Array.isArray(data.route) ? data.route : [];
@@ -539,6 +651,28 @@ export async function fetchTrainDetails(trainNumber: string): Promise<TrainDetai
     })
     .filter((h) => h.stationCode);
 
+  let coachPosition =
+    pickCoachPositionFromTrain(train) ||
+    normalizeCoachPositionRaw(
+      (data as { coachPosition?: unknown }).coachPosition
+    );
+
+  // Details endpoint sometimes omits rake — live payload usually has it.
+  if (!coachPosition) {
+    try {
+      const live = (await railGet(
+        `/trains/${number}/live?haltsOnly=true`
+      )) as Record<string, unknown>;
+      const liveTrain =
+        live.train && typeof live.train === 'object'
+          ? (live.train as Record<string, unknown>)
+          : null;
+      coachPosition = pickCoachPositionFromTrain(liveTrain);
+    } catch {
+      /* keep undefined */
+    }
+  }
+
   return {
     trainNumber: String(train.number || number),
     trainName: train.name ? String(train.name) : undefined,
@@ -558,9 +692,7 @@ export async function fetchTrainDetails(trainNumber: string): Promise<TrainDetai
     avgSpeedKmh: typeof train.avgSpeed === 'number' ? train.avgSpeed : undefined,
     totalHalts: typeof train.totalHalts === 'number' ? train.totalHalts : halts.length,
     returnTrain: train.returnTrain ? String(train.returnTrain) : undefined,
-    coachPosition: train.coachPosition
-      ? String(train.coachPosition)
-      : undefined,
+    coachPosition,
     halts,
   };
 }
@@ -768,32 +900,99 @@ function normalizeSegmentProgress(raw: unknown): number | undefined {
   return n;
 }
 
+function readCoord(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim()) {
+    const n = Number(value);
+    if (Number.isFinite(n)) return n;
+  }
+  return undefined;
+}
+
+function haversineKm(
+  lat1: number,
+  lng1: number,
+  lat2: number,
+  lng2: number
+): number {
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const R = 6371;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function readHaltDistance(halt: unknown): number | undefined {
+  if (!halt || typeof halt !== 'object') return undefined;
+  const h = halt as Record<string, unknown>;
+  const raw = h.distance ?? h.distanceKm ?? h.distanceFromSource;
+  if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
+  if (typeof raw === 'string' && raw.trim()) {
+    const n = Number(raw);
+    if (Number.isFinite(n)) return n;
+  }
+  return undefined;
+}
+
 /**
- * Remaining km to next halt using previousHalt → nextHalt distances
- * and segmentProgress. Avoids treating "progress missing" as 0% (which
- * wrongly jumps the UI back to the full segment length).
+ * Remaining km to next halt.
+ * Prefer live GPS → next station when available (matches RailRadar/NTES style),
+ * else previousHalt→nextHalt × segmentProgress.
  */
 function computeKmToNextHalt(args: {
   route: RailRadarStop[];
   previousHaltCode?: string;
   nextHaltCode?: string;
+  currentStationCode?: string;
   previousDistance?: number;
   nextDistance?: number;
   segmentProgress?: number;
   stopStatus?: string;
+  trainLat?: number;
+  trainLng?: number;
+  nextLat?: number;
+  nextLng?: number;
 }): number | undefined {
   const {
     route,
     previousHaltCode,
     nextHaltCode,
+    currentStationCode,
     previousDistance,
     nextDistance,
     segmentProgress,
     stopStatus,
+    trainLat,
+    trainLng,
+    nextLat,
+    nextLng,
   } = args;
 
-  if (['arrived', 'at-station'].includes(String(stopStatus || '').toLowerCase())) {
+  const status = String(stopStatus || '').toLowerCase();
+  const atStation = status === 'arrived' || status === 'at-station';
+  const atNextHalt =
+    !!currentStationCode &&
+    !!nextHaltCode &&
+    currentStationCode.toUpperCase() === nextHaltCode.toUpperCase();
+
+  if (atStation && atNextHalt) {
     return 0;
+  }
+
+  // Live GPS distance to next halt (closest to what other apps show)
+  if (
+    typeof trainLat === 'number' &&
+    typeof trainLng === 'number' &&
+    typeof nextLat === 'number' &&
+    typeof nextLng === 'number'
+  ) {
+    const gpsKm = haversineKm(trainLat, trainLng, nextLat, nextLng);
+    if (Number.isFinite(gpsKm)) {
+      return Math.max(0, Math.round(gpsKm));
+    }
   }
 
   const prevFromRoute = previousHaltCode
@@ -820,20 +1019,137 @@ function computeKmToNextHalt(args: {
   }
 
   const segLen = nextDist - prevDist;
-  if (segLen <= 0) return 0;
+  if (!(segLen > 0)) return undefined;
 
+  // Prefer progress whenever we have it — even if status still says at-station
+  // after the train has left (sticky status used to force full segment length).
   if (typeof segmentProgress === 'number') {
-    return Math.max(0, Math.round(segLen * (1 - segmentProgress)));
+    const remaining = Math.round(segLen * (1 - segmentProgress));
+    if (
+      remaining <= 0 &&
+      nextHaltCode &&
+      currentStationCode &&
+      currentStationCode.toUpperCase() !== nextHaltCode.toUpperCase()
+    ) {
+      return Math.max(1, Math.round(segLen * 0.02));
+    }
+    return Math.max(0, remaining);
   }
 
-  // No progress yet — unknown remaining; caller should keep last stable value
+  // Truly stopped at previous halt with no progress yet → full segment
+  if (atStation && !atNextHalt) {
+    return Math.round(segLen);
+  }
+
   return undefined;
 }
 
 function findStop(route: RailRadarStop[], code?: string): RailRadarStop | undefined {
   if (!code) return undefined;
-  const want = code.toUpperCase();
-  return route.find((s) => String(s.stationCode || '').toUpperCase() === want);
+  const needle = code.toUpperCase();
+  return route.find((s) => s.stationCode.toUpperCase() === needle);
+}
+
+export function cleanPlatform(value?: string | null): string | undefined {
+  if (value == null) return undefined;
+  const s = String(value).trim();
+  if (!s || s === '-' || s.toLowerCase() === 'null' || s.toLowerCase() === 'na') {
+    return undefined;
+  }
+  return s;
+}
+
+export type ActiveLivePlatform = {
+  platform?: string;
+  stationCode?: string;
+  stationName?: string;
+  /** at = train at this station; next = approaching / left previous → next PF; origin = not started */
+  phase: 'at' | 'next' | 'origin';
+};
+
+/**
+ * Platform for the live status section:
+ * - At / arriving at a station → that station's PF
+ * - Approaching / departed / running between → next halt's PF
+ */
+export function resolveActiveLivePlatform(
+  live?: LiveTrainStatus | null,
+  fallbackPlatform?: string
+): ActiveLivePlatform {
+  const fallback = cleanPlatform(fallbackPlatform);
+  if (!live) {
+    return { platform: fallback, phase: 'origin' };
+  }
+
+  const pick = (
+    phase: ActiveLivePlatform['phase'],
+    code?: string,
+    name?: string
+  ): ActiveLivePlatform => {
+    const stop = findStop(live.route, code);
+    const platform =
+      cleanPlatform(stop?.platform) ||
+      (phase === 'origin' ? fallback : undefined) ||
+      undefined;
+    return {
+      platform: platform || (phase !== 'origin' ? undefined : fallback),
+      stationCode: (code || stop?.stationCode || undefined)?.toUpperCase(),
+      stationName: name || stop?.stationName || undefined,
+      phase,
+    };
+  };
+
+  if (live.status === 'not-started' || live.status === 'cancelled') {
+    const first = live.route[0];
+    return pick(
+      'origin',
+      live.previousHaltCode || live.currentStationCode || first?.stationCode,
+      live.previousHaltName || live.currentStationName || first?.stationName
+    );
+  }
+
+  const stopStatus = String(live.currentStopStatus || '').toLowerCase();
+  const atStation =
+    stopStatus === 'arrived' ||
+    stopStatus === 'at-station' ||
+    stopStatus === 'arriving' ||
+    stopStatus === 'halted' ||
+    stopStatus.includes('at-station') ||
+    stopStatus.includes('at station') ||
+    (stopStatus.includes('arriv') && !stopStatus.includes('depart'));
+
+  if (atStation && (live.currentStationCode || live.currentStationName)) {
+    const hit = pick('at', live.currentStationCode, live.currentStationName);
+    if (hit.platform || hit.stationCode) return hit;
+  }
+
+  // Approaching next / left current → next station platform
+  if (live.nextHaltCode || live.nextHaltName) {
+    const hit = pick('next', live.nextHaltCode, live.nextHaltName);
+    if (hit.platform || hit.stationCode) return hit;
+  }
+
+  // Fallback: scan route for current / next by stop status
+  const routeAt = live.route.find((s) => {
+    const st = String(s.status || '').toLowerCase();
+    return st === 'arrived' || st === 'at-station' || st === 'arriving';
+  });
+  if (routeAt) {
+    return pick('at', routeAt.stationCode, routeAt.stationName);
+  }
+  const routeNext = live.route.find((s) => {
+    const st = String(s.status || '').toLowerCase();
+    return st === 'upcoming' || st === 'arriving' || st === 'scheduled';
+  });
+  if (routeNext) {
+    return pick('next', routeNext.stationCode, routeNext.stationName);
+  }
+
+  if (live.currentStationCode) {
+    return pick('at', live.currentStationCode, live.currentStationName);
+  }
+
+  return { platform: fallback, phase: 'origin' };
 }
 
 /**
@@ -845,7 +1161,12 @@ function normalizeLiveRoute(raw: unknown): RailRadarStop[] {
   return raw
     .map((item, index) => {
       const s = (item || {}) as Record<string, unknown>;
-      const nested = (s.station || {}) as { code?: string; name?: string };
+      const nested = (s.station || {}) as {
+        code?: string;
+        name?: string;
+        lat?: number;
+        lng?: number;
+      };
       const stationCode = String(
         s.stationCode || s.code || nested.code || ''
       ).trim();
@@ -870,9 +1191,11 @@ function normalizeLiveRoute(raw: unknown): RailRadarStop[] {
         status: s.status ? String(s.status) : undefined,
         platform: s.platform != null ? String(s.platform) : null,
         distance: typeof s.distance === 'number' ? s.distance : undefined,
+        lat: readCoord(s.lat ?? nested.lat),
+        lng: readCoord(s.lng ?? nested.lng),
       } satisfies RailRadarStop;
     })
-    .filter((s): s is RailRadarStop => Boolean(s));
+    .filter((s): s is NonNullable<typeof s> => s != null) as RailRadarStop[];
 }
 
 /** Map live route stops to boarding-pass from/to expected times. */
@@ -923,12 +1246,7 @@ export function resolveBoardingLiveTimes(
       : formatIsoTime(to.scheduledArrival);
   }
 
-  const cleanPf = (value?: string | null) => {
-    if (value == null) return undefined;
-    const s = String(value).trim();
-    if (!s || s === '-' || s.toLowerCase() === 'null') return undefined;
-    return s;
-  };
+  const cleanPf = cleanPlatform;
 
   return {
     scheduledDeparture: formatIsoTime(from?.scheduledDeparture),

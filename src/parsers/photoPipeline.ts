@@ -7,6 +7,7 @@ import {
   fetchPnrDetails,
   pnrResultToDraft,
 } from '../services/pnrLookup';
+import { recognizeTicketText } from '../services/ticketOcr';
 import { ParsedTicketDraft } from '../types/ticket';
 import { parseWithProviders } from './providers';
 
@@ -19,14 +20,12 @@ async function copyImageToAppStorage(uri: string, name?: string): Promise<string
   return dest;
 }
 
-async function ocrImageUri(uri: string): Promise<string> {
+async function ocrImageUri(uri: string): Promise<{ text: string; engine: string }> {
   if (Platform.OS === 'web') {
     throw new Error('Photo OCR is only available on Android/iOS builds.');
   }
-  const TextRecognition = (await import('@react-native-ml-kit/text-recognition')).default;
-  const { TextRecognitionScript } = await import('@react-native-ml-kit/text-recognition');
-  const result = await TextRecognition.recognize(uri, TextRecognitionScript.LATIN);
-  return (result.text || '').trim();
+  const result = await recognizeTicketText([uri]);
+  return { text: result.text, engine: result.engine };
 }
 
 export async function processTicketPhotoUri(
@@ -35,8 +34,11 @@ export async function processTicketPhotoUri(
 ): Promise<ParsedTicketDraft> {
   const storedUri = await copyImageToAppStorage(uri, fileName);
   let text = '';
+  let engine = 'none';
   try {
-    text = await ocrImageUri(uri);
+    const ocr = await ocrImageUri(uri);
+    text = ocr.text;
+    engine = ocr.engine;
   } catch {
     text = '';
   }
@@ -64,7 +66,7 @@ export async function processTicketPhotoUri(
         source: 'pdf',
         extractionMethod: 'ocr',
         extractionNote: text
-          ? 'Photo OCR found PNR · full details from PNR API'
+          ? `Photo OCR (${engine}) found PNR · full details from PNR API`
           : 'Details from PNR API',
         originalPdfUri: storedUri,
         rawText: text,
@@ -86,11 +88,16 @@ export async function processTicketPhotoUri(
     ...draft,
     source: 'pdf',
     extractionMethod: 'ocr',
-    extractionNote: 'Read ticket text from photo (on-device OCR)',
+    extractionNote:
+      engine === 'unlimited-ocr'
+        ? 'Read with Baidu Unlimited-OCR (cloud)'
+        : 'Read ticket text from photo (on-device OCR)',
     originalPdfUri: storedUri,
+    ...(draft.kind === 'hotel' ? { hotelPhotoUri: storedUri } : {}),
     needsManualCompletion: draft.confidence < 0.65,
     rawText: text,
   };
+  if (draft.kind === 'hotel') return withMeta;
   return enrichDraftWithPnr(withMeta);
 }
 
@@ -142,5 +149,5 @@ export async function pickAndProcessTicketPhoto(
     throw new Error('No photo was selected. Please try again.');
   }
 
-  return processTicketPhotoUri(asset.uri, asset.fileName);
+  return processTicketPhotoUri(asset.uri, asset.fileName ?? undefined);
 }

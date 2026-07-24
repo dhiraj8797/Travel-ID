@@ -16,7 +16,7 @@ import { useAuth } from '../src/auth/AuthContext';
 import { SocialAuthButtons } from '../src/components/auth/SocialAuthButtons';
 import { colors, spacing } from '../src/theme';
 
-const logo = require('../assets/travel-id-logo.png');
+const logo = require('../assets/travel-id-logo.jpg');
 
 export default function SignupScreen() {
   const router = useRouter();

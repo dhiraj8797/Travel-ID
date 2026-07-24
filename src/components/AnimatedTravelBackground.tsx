@@ -12,6 +12,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import { LinearGradient } from 'expo-linear-gradient';
 import { getIndiaSkySnapshot, IndiaSkySnapshot } from '../utils/indiaSky';
+import { HeadlightCone } from './HeadlightCone';
 
 type Props = {
   variant?: 'bus' | 'rail' | 'both';
@@ -215,6 +216,10 @@ export function AnimatedTravelBackground({ variant = 'both' }: Props) {
     };
   });
 
+  const headlampStyle = useAnimatedStyle(() => ({
+    opacity: nightAmt.value * (0.72 + rayPulse.value * 0.28),
+  }));
+
   const showBus = variant === 'bus' || variant === 'both';
   const showTrain = variant === 'rail' || variant === 'both';
   const sceneTop = Math.max(118, height * 0.19);
@@ -367,6 +372,10 @@ export function AnimatedTravelBackground({ variant = 'both' }: Props) {
             ))}
           </View>
           <Animated.View style={[styles.trainWrap, trainStyle]}>
+            {/* Local +X becomes travel direction after scaleX:-1 */}
+            <Animated.View style={[styles.trainBeamAnchor, headlampStyle]}>
+              <HeadlightCone length={140} spread={42} tiltDeg={8} />
+            </Animated.View>
             <Image
               source={require('../../assets/vehicles/hero-vande-bharat.png')}
               style={styles.trainImg}
@@ -386,6 +395,9 @@ export function AnimatedTravelBackground({ variant = 'both' }: Props) {
             </Animated.View>
           </View>
           <Animated.View style={[styles.busWrap, busStyle]}>
+            <Animated.View style={[styles.busBeamAnchor, headlampStyle]}>
+              <HeadlightCone length={150} spread={52} tiltDeg={12} />
+            </Animated.View>
             <Image
               source={require('../../assets/vehicles/hero-bus.png')}
               style={styles.busImg}
@@ -446,7 +458,7 @@ const STAR_DOTS = [
 
 const styles = StyleSheet.create({
   stars: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
   },
   star: {
     position: 'absolute',
@@ -604,6 +616,13 @@ const styles = StyleSheet.create({
     width: 460,
     height: 52,
   },
+  trainBeamAnchor: {
+    position: 'absolute',
+    // Nose bumper lamps (low), not cabin height
+    left: 432,
+    bottom: -2,
+    zIndex: 2,
+  },
   road: {
     position: 'absolute',
     left: 0,
@@ -637,6 +656,13 @@ const styles = StyleSheet.create({
   busImg: {
     width: 230,
     height: 92,
+  },
+  busBeamAnchor: {
+    position: 'absolute',
+    // Front bumper headlamps (low), not driver window
+    left: 198,
+    bottom: 2,
+    zIndex: 2,
   },
   bottomFade: {
     position: 'absolute',

@@ -26,8 +26,8 @@ export type CiriumFlightStatus = {
   estimatedArrival?: string;
   actualArrival?: string;
   delayMinutes?: number;
-  /** How we found this row (free tier = realtime). */
-  source?: 'realtime' | 'dated';
+  /** How we found this row. */
+  source?: 'cirium' | 'realtime' | 'dated';
   raw?: unknown;
 };
 
@@ -44,11 +44,13 @@ const STATUS_LABELS: Record<string, string> = {
   incident: 'Incident',
   diverted: 'Diverted',
   S: 'Scheduled',
-  A: 'Active',
+  A: 'In air',
   L: 'Landed',
   C: 'Cancelled',
   D: 'Diverted',
+  R: 'Redirected',
   U: 'Unknown',
+  NO: 'Not operating',
 };
 
 const flightCache = new Map<string, { at: number; value: CiriumFlightStatus | null }>();
@@ -56,7 +58,183 @@ const FLIGHT_CACHE_TTL_MS = 90_000;
 
 function labelFor(code?: string): string {
   if (!code) return 'Unknown';
-  return STATUS_LABELS[code.toLowerCase()] || STATUS_LABELS[code] || code;
+  return STATUS_LABELS[code] || STATUS_LABELS[code.toLowerCase()] || code;
+}
+
+function pickDate(
+  ...values: Array<{ dateLocal?: string; dateUtc?: string } | string | null | undefined>
+): string | undefined {
+  for (const v of values) {
+    if (!v) continue;
+    if (typeof v === 'string' && v.trim()) return v.trim();
+    if (typeof v === 'object') {
+      if (v.dateLocal) return v.dateLocal;
+      if (v.dateUtc) return v.dateUtc;
+    }
+  }
+  return undefined;
+}
+
+type CiriumFs = {
+  flightId?: number | string;
+  carrierFsCode?: string;
+  flightNumber?: string;
+  departureAirportFsCode?: string;
+  arrivalAirportFsCode?: string;
+  status?: string;
+  delays?: {
+    departureGateDelayMinutes?: number;
+    arrivalGateDelayMinutes?: number;
+  };
+  airportResources?: {
+    departureTerminal?: string;
+    departureGate?: string;
+    arrivalTerminal?: string;
+    arrivalGate?: string;
+  };
+  operationalTimes?: Record<
+    string,
+    { dateLocal?: string; dateUtc?: string } | undefined
+  >;
+};
+
+function mapCiriumFlight(
+  f: CiriumFs,
+  fallbackCarrier: string,
+  fallbackNumber: string
+): CiriumFlightStatus {
+  const ot = f.operationalTimes || {};
+  const res = f.airportResources || {};
+  const delay =
+    typeof f.delays?.departureGateDelayMinutes === 'number'
+      ? f.delays.departureGateDelayMinutes
+      : typeof f.delays?.arrivalGateDelayMinutes === 'number'
+        ? f.delays.arrivalGateDelayMinutes
+        : undefined;
+
+  return {
+    flightId: f.flightId != null ? String(f.flightId) : undefined,
+    carrier: (f.carrierFsCode || fallbackCarrier || '').toUpperCase(),
+    flightNumber: String(f.flightNumber || fallbackNumber),
+    status: f.status || 'U',
+    statusLabel: labelFor(f.status),
+    departureAirport: f.departureAirportFsCode,
+    arrivalAirport: f.arrivalAirportFsCode,
+    departureTerminal: res.departureTerminal,
+    arrivalTerminal: res.arrivalTerminal,
+    departureGate: res.departureGate,
+    arrivalGate: res.arrivalGate,
+    scheduledDeparture: pickDate(
+      ot.publishedDeparture,
+      ot.scheduledGateDeparture,
+      ot.flightPlanPlannedDeparture
+    ),
+    estimatedDeparture: pickDate(
+      ot.estimatedGateDeparture,
+      ot.estimatedRunwayDeparture
+    ),
+    actualDeparture: pickDate(ot.actualGateDeparture, ot.actualRunwayDeparture),
+    scheduledArrival: pickDate(
+      ot.publishedArrival,
+      ot.scheduledGateArrival,
+      ot.flightPlanPlannedArrival
+    ),
+    estimatedArrival: pickDate(ot.estimatedGateArrival, ot.estimatedRunwayArrival),
+    actualArrival: pickDate(ot.actualGateArrival, ot.actualRunwayArrival),
+    delayMinutes: delay,
+    source: 'cirium',
+    raw: f,
+  };
+}
+
+function scoreCirium(
+  f: CiriumFs,
+  fromCode?: string,
+  toCode?: string
+): number {
+  let score = 0;
+  const st = String(f.status || '').toUpperCase();
+  if (st === 'A') score += 50;
+  else if (st === 'S') score += 35;
+  else if (st === 'L') score += 10;
+  else if (st === 'C') score -= 40;
+
+  const dep = (f.departureAirportFsCode || '').toUpperCase();
+  const arr = (f.arrivalAirportFsCode || '').toUpperCase();
+  if (fromCode && dep === fromCode.toUpperCase()) score += 40;
+  if (toCode && arr === toCode.toUpperCase()) score += 40;
+  if (f.airportResources?.departureGate) score += 8;
+  if (f.airportResources?.departureTerminal) score += 4;
+  return score;
+}
+
+async function fetchCiriumNative(input: {
+  carrier: string;
+  flight: string;
+  iso: string;
+  fromCode?: string;
+  toCode?: string;
+}): Promise<CiriumFlightStatus | null> {
+  const [y, m, d] = input.iso.split('-');
+  const qs = new URLSearchParams({
+    carrier: input.carrier,
+    flight: input.flight,
+    year: y,
+    month: m,
+    day: d,
+    utc: 'false',
+  });
+  if (input.fromCode) qs.set('airport', input.fromCode.toUpperCase());
+
+  const res = await proxyFetch(`/cirium/flight-status?${qs}`).catch((e) => {
+    throw new Error(
+      e instanceof Error ? e.message : formatProxyNetworkError(e, getApiProxyUrl())
+    );
+  });
+
+  const json = (await res.json()) as {
+    error?: { message?: string };
+    provider?: string;
+    flightStatuses?: CiriumFs[];
+  };
+
+  if (res.status === 503) {
+    // Cirium not configured on proxy — caller falls back to Aviationstack
+    return null;
+  }
+
+  if (!res.ok || json.error) {
+    throw new Error(
+      json.error?.message || `Cirium lookup failed (${res.status})`
+    );
+  }
+
+  const list = Array.isArray(json.flightStatuses) ? json.flightStatuses : [];
+  if (!list.length) return null;
+
+  let best: CiriumFs | null = null;
+  let bestScore = -Infinity;
+  for (const f of list) {
+    const s = scoreCirium(f, input.fromCode, input.toCode);
+    if (s > bestScore) {
+      best = f;
+      bestScore = s;
+    }
+  }
+  if (!best) return null;
+
+  // If route codes were given and nothing matched either airport, reject
+  if (
+    input.fromCode &&
+    input.toCode &&
+    bestScore < 40 &&
+    (best.departureAirportFsCode || '').toUpperCase() !==
+      input.fromCode.toUpperCase()
+  ) {
+    return null;
+  }
+
+  return mapCiriumFlight(best, input.carrier, input.flight);
 }
 
 type AvLeg = {
@@ -87,7 +265,7 @@ type AvFlight = {
   };
 };
 
-function mapFlight(
+function mapAvFlight(
   f: AvFlight,
   fallbackCarrier: string,
   fallbackNumber: string,
@@ -131,7 +309,7 @@ function mapFlight(
   };
 }
 
-function scoreFlight(
+function scoreAvFlight(
   f: AvFlight,
   preferDate: string,
   fromCode?: string,
@@ -159,7 +337,7 @@ function scoreFlight(
   return score;
 }
 
-function pickBest(
+function pickBestAv(
   list: AvFlight[],
   preferDate: string,
   fromCode?: string,
@@ -169,13 +347,12 @@ function pickBest(
   let best: AvFlight | null = null;
   let bestScore = -Infinity;
   for (const f of list) {
-    const s = scoreFlight(f, preferDate, fromCode, toCode);
+    const s = scoreAvFlight(f, preferDate, fromCode, toCode);
     if (s > bestScore) {
       best = f;
       bestScore = s;
     }
   }
-  // Reject weak mismatches (wrong route) when we have airport codes
   if (
     best &&
     fromCode &&
@@ -188,7 +365,7 @@ function pickBest(
   return best;
 }
 
-async function fetchFlights(qs: URLSearchParams): Promise<AvFlight[]> {
+async function fetchAviationstack(qs: URLSearchParams): Promise<AvFlight[]> {
   const proxy = getApiProxyUrl();
   if (!proxy) {
     throw new Error(
@@ -198,9 +375,7 @@ async function fetchFlights(qs: URLSearchParams): Promise<AvFlight[]> {
 
   const res = await proxyFetch(`/flights?${qs}`).catch((e) => {
     throw new Error(
-      e instanceof Error
-        ? e.message
-        : formatProxyNetworkError(e, proxy)
+      e instanceof Error ? e.message : formatProxyNetworkError(e, proxy)
     );
   });
   const json = (await res.json()) as {
@@ -208,7 +383,6 @@ async function fetchFlights(qs: URLSearchParams): Promise<AvFlight[]> {
     data?: AvFlight[];
   };
 
-  // Free plan often rejects historical / flight_date — treat as empty, not fatal
   if (json.error) {
     const info = `${json.error.info || ''} ${json.error.message || ''}`.toLowerCase();
     if (
@@ -216,7 +390,8 @@ async function fetchFlights(qs: URLSearchParams): Promise<AvFlight[]> {
       info.includes('flight_date') ||
       info.includes('upgrade') ||
       info.includes('your plan') ||
-      info.includes('functionality')
+      info.includes('functionality') ||
+      info.includes('not configured')
     ) {
       return [];
     }
@@ -243,10 +418,9 @@ function daysFromToday(iso: string): number {
 }
 
 /**
- * Live flight status tuned for Aviationstack Free:
- * - Prefer real-time (no flight_date) — Free has no Historical Flights
- * - Cache to protect the 100 calls/month quota
- * - Soft-fail dated lookups instead of hard errors
+ * Live flight status:
+ * 1) Cirium FlightStats (preferred when proxy has CIRIUM_APP_ID/KEY)
+ * 2) Aviationstack fallback
  */
 export async function fetchCiriumFlightStatus(input: {
   airlineCode?: string;
@@ -283,31 +457,48 @@ export async function fetchCiriumFlightStatus(input: {
     return cached.value;
   }
 
-  const delta = daysFromToday(iso);
-  // Free realtime feed won't have far-future schedules
-  if (delta > 2) {
-    const none = null;
-    flightCache.set(cacheKey, { at: Date.now(), value: none });
-    throw new Error(
-      'Live flight data usually appears within ~48 hours of departure (Free plan)'
+  // Prefer Cirium
+  try {
+    const cirium = await fetchCiriumNative({
+      carrier: parts.carrier,
+      flight: parts.flight,
+      iso,
+      fromCode: input.fromCode,
+      toCode: input.toCode,
+    });
+    if (cirium) {
+      flightCache.set(cacheKey, { at: Date.now(), value: cirium });
+      return cirium;
+    }
+  } catch (e) {
+    // If Cirium is configured but failed, still try Aviationstack
+    console.warn(
+      '[flight]',
+      e instanceof Error ? e.message : 'Cirium lookup failed — trying fallback'
     );
   }
 
-  // 1) Real-time first (Free plan strength)
+  const delta = daysFromToday(iso);
+  if (delta > 2) {
+    flightCache.set(cacheKey, { at: Date.now(), value: null });
+    throw new Error(
+      'Live flight data usually appears within a few days of departure'
+    );
+  }
+
+  // Aviationstack fallback
   const realtimeQs = new URLSearchParams({ flight_iata: flightIata });
   if (input.fromCode) realtimeQs.set('dep_iata', input.fromCode.toUpperCase());
   if (input.toCode) realtimeQs.set('arr_iata', input.toCode.toUpperCase());
 
-  let list = await fetchFlights(realtimeQs);
+  let list = await fetchAviationstack(realtimeQs);
   let source: 'realtime' | 'dated' = 'realtime';
 
-  // Soft client filter by date when the API includes flight_date
   if (list.length) {
     const dated = list.filter((f) => !f.flight_date || f.flight_date === iso);
     if (dated.length) list = dated;
   }
 
-  // 2) Only for today / nearby: optional dated query (may be blocked on Free)
   if (!list.length && delta >= -1 && delta <= 1) {
     const datedQs = new URLSearchParams({
       flight_iata: flightIata,
@@ -316,19 +507,20 @@ export async function fetchCiriumFlightStatus(input: {
     if (input.fromCode) datedQs.set('dep_iata', input.fromCode.toUpperCase());
     if (input.toCode) datedQs.set('arr_iata', input.toCode.toUpperCase());
     try {
-      const datedList = await fetchFlights(datedQs);
+      const datedList = await fetchAviationstack(datedQs);
       if (datedList.length) {
         list = datedList;
         source = 'dated';
       }
     } catch {
-      /* Free plan — ignore */
+      /* ignore */
     }
   }
 
-  // 3) Broader realtime without airport filters
   if (!list.length && (input.fromCode || input.toCode)) {
-    list = await fetchFlights(new URLSearchParams({ flight_iata: flightIata }));
+    list = await fetchAviationstack(
+      new URLSearchParams({ flight_iata: flightIata })
+    );
     source = 'realtime';
     if (list.length) {
       const dated = list.filter((f) => !f.flight_date || f.flight_date === iso);
@@ -336,8 +528,10 @@ export async function fetchCiriumFlightStatus(input: {
     }
   }
 
-  const best = pickBest(list, iso, input.fromCode, input.toCode);
-  const mapped = best ? mapFlight(best, parts.carrier, parts.flight, source) : null;
+  const best = pickBestAv(list, iso, input.fromCode, input.toCode);
+  const mapped = best
+    ? mapAvFlight(best, parts.carrier, parts.flight, source)
+    : null;
   flightCache.set(cacheKey, { at: Date.now(), value: mapped });
   return mapped;
 }

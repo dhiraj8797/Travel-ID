@@ -8,31 +8,32 @@ import Constants from 'expo-constants';
 import { GOOGLE_WEB_CLIENT_ID } from './config';
 import { AuthSession, AuthUser, normalizeAuthUser } from './types';
 
-/** Debug keystore SHA-1 used by current release APKs (signingConfigs.debug). */
+/** Debug keystore SHA-1 (local debug / older sideload builds). */
 export const ANDROID_DEBUG_SHA1 =
   '5E:8F:16:06:2E:A3:CD:2C:4A:0D:54:78:76:BA:A6:F3:8C:AB:F6:25';
 
+/**
+ * Upload / release keystore SHA-1 (current TravelID-release.apk & Play AAB).
+ * Must be added in Firebase → Project settings → Android app → SHA certificate fingerprints.
+ */
+export const ANDROID_RELEASE_SHA1 =
+  'F1:A9:8D:AD:F2:A2:14:AE:93:F2:C9:68:BB:08:2A:81:69:F1:16:9E';
+
+const SHA1_HELP =
+  `Package: com.travelid.app\n\n` +
+  `Release SHA-1 (required for current APK):\n${ANDROID_RELEASE_SHA1}\n\n` +
+  `Debug SHA-1 (optional, for debug builds):\n${ANDROID_DEBUG_SHA1}`;
+
 let configured = false;
-
-export function webClientId(): string {
-  const extra = Constants.expoConfig?.extra as
-    | { googleWebClientId?: string }
-    | undefined;
-  return (
-    process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ||
-    extra?.googleWebClientId ||
-    GOOGLE_WEB_CLIENT_ID
-  ).trim();
-}
-
-/** Reset so next call can reconfigure (e.g. after Gmail connect). */
-export function resetGoogleSignInConfig() {
-  configured = false;
-}
 
 function ensureConfigured() {
   if (configured) return;
-  const id = webClientId();
+  const id = (
+    process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ||
+    (Constants.expoConfig?.extra as { googleWebClientId?: string } | undefined)
+      ?.googleWebClientId ||
+    GOOGLE_WEB_CLIENT_ID
+  ).trim();
   if (!id) {
     throw new Error('Google Web Client ID is not configured.');
   }
@@ -57,14 +58,14 @@ function mapGoogleError(e: unknown): Error {
     }
     if (
       e.code === '10' ||
-      e.code === 10 ||
+      String(e.code) === '10' ||
       String(e.code).includes('DEVELOPER_ERROR') ||
       /developer_error|code:\s*10\b/i.test(String(e.message || ''))
     ) {
       return new Error(
         `Google Sign-In developer error (SHA-1 mismatch).\n\n` +
-          `In Firebase → Android app (com.travelid.app) add fingerprint:\n\n` +
-          `${ANDROID_DEBUG_SHA1}`
+          `In Firebase → Android app add this fingerprint:\n\n` +
+          `${SHA1_HELP}`
       );
     }
   }
@@ -112,7 +113,7 @@ export async function signInWithGoogleAccount(): Promise<AuthSession> {
     const gUser = response.data.user;
     if (!idToken) {
       throw new Error(
-        `Google did not return an ID token.\n\nAdd this SHA-1 in Firebase:\n${ANDROID_DEBUG_SHA1}`
+        `Google did not return an ID token.\n\nAdd this SHA-1 in Firebase:\n\n${SHA1_HELP}`
       );
     }
     if (!gUser?.id) {
@@ -148,7 +149,7 @@ export async function refreshGoogleProfile(
   ensureConfigured();
   try {
     const response = await GoogleSignin.signInSilently();
-    if (!isSuccessResponse(response)) return null;
+    if (response.type !== 'success') return null;
     const idToken = response.data.idToken;
     const gUser = response.data.user;
     if (!idToken || !gUser?.id) return null;

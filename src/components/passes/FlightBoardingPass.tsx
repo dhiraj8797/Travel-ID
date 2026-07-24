@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo } from 'react';
+import React, { useCallback, useEffect, useMemo } from 'react';
 import {
   ActivityIndicator,
   ImageBackground,
@@ -22,12 +22,19 @@ import {
 } from '../../utils/airports';
 import { airlineHeroImage } from '../../utils/airlineHero';
 import { BoardingBarcodeView } from './BoardingBarcodeView';
+import {
+  applyCompletedIfPast,
+  coerceFlightArchiveDate,
+  isPastPass,
+  istTodayIso,
+} from '../../utils/passTime';
 
 const BG = '#010813';
 const CARD = '#0B1628';
 const BLUE = '#1D8CF8';
 const GREEN = '#00E676';
 const MUTED = '#8FA3C1';
+const DONE = '#9CA3AF';
 
 type Props = {
   ticket: Ticket;
@@ -39,6 +46,43 @@ type Props = {
 export function FlightBoardingPass({ ticket, onBack, onMenu, embedded }: Props) {
   const insets = useSafeAreaInsets();
   const { updateTicket } = useTickets();
+  // Re-evaluate when the IST calendar day rolls over → live becomes Completed
+  const [dayKey, setDayKey] = React.useState(istTodayIso);
+  useEffect(() => {
+    const id = setInterval(() => {
+      const today = istTodayIso();
+      setDayKey((prev) => (prev === today ? prev : today));
+    }, 60_000);
+    return () => clearInterval(id);
+  }, []);
+
+  const normalized = useMemo(
+    () => applyCompletedIfPast(coerceFlightArchiveDate(ticket)),
+    [ticket, dayKey]
+  );
+  const journeyDone =
+    isPastPass(normalized) || Boolean(normalized.journeyCompleted);
+
+  // Persist archive/completed flags so live polling stays off next open
+  useEffect(() => {
+    if (embedded) return;
+    const dirty =
+      Boolean(normalized.journeyCompleted) !== Boolean(ticket.journeyCompleted) ||
+      normalized.departureDate !== ticket.departureDate ||
+      normalized.bookingStatus !== ticket.bookingStatus ||
+      (normalized.flightStatus || '') !== (ticket.flightStatus || '');
+    if (!dirty) return;
+    void updateTicket(normalized);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only when archive fields drift
+  }, [
+    embedded,
+    normalized.journeyCompleted,
+    normalized.departureDate,
+    normalized.bookingStatus,
+    normalized.flightStatus,
+    ticket.id,
+  ]);
+
   const onUpdate = useCallback(
     async (next: Ticket) => {
       await updateTicket(next);
@@ -48,8 +92,8 @@ export function FlightBoardingPass({ ticket, onBack, onMenu, embedded }: Props) 
 
   const { loading, refresh, waitingForKeys, error, status, lastOkAt } =
     useLiveFlightStatus({
-      ticket,
-      enabled: !embedded,
+      ticket: normalized,
+      enabled: !embedded && !journeyDone,
       onUpdate,
     });
 
@@ -105,28 +149,42 @@ export function FlightBoardingPass({ ticket, onBack, onMenu, embedded }: Props) 
     '—';
   const missingTimes = depTime === '—' && arrTime === '—';
   const statusLabel = useMemo(() => {
+    if (journeyDone) return 'COMPLETED';
     if (ticket.delayMinutes && ticket.delayMinutes > 0) return 'DELAYED';
-    const s = (status?.statusLabel || ticket.flightStatus || '').toUpperCase();
+    const s = (
+      status?.statusLabel ||
+      normalized.flightStatus ||
+      ticket.flightStatus ||
+      ''
+    ).toUpperCase();
     if (!s || s === 'SCHEDULED' || s === 'S' || s === 'ON TIME') return 'ON TIME';
     if (s.includes('CANCEL')) return 'CANCELLED';
     if (s.includes('LAND')) return 'LANDED';
     if (s.includes('ACTIVE') || s.includes('AIR') || s === 'IN AIR') return 'IN AIR';
     return s;
-  }, [ticket.delayMinutes, ticket.flightStatus, status?.statusLabel]);
+  }, [
+    journeyDone,
+    ticket.delayMinutes,
+    ticket.flightStatus,
+    normalized.flightStatus,
+    status?.statusLabel,
+  ]);
   const onTime = statusLabel === 'ON TIME';
   const cabin = ticket.classType || 'Economy';
   const aircraft = ticket.vehicleType || ticket.serviceName || 'Aircraft';
-  const liveHint = waitingForKeys
-    ? 'Live pending — start API proxy'
-    : error
-      ? error.length > 64
-        ? `${error.slice(0, 61)}…`
-        : error
-      : loading
-        ? 'Updating…'
-        : lastOkAt || ticket.lastStatusAt
-          ? 'Live · up to date'
-          : 'Tap refresh for live gate & times';
+  const liveHint = journeyDone
+    ? 'Completed · live updates ended'
+    : waitingForKeys
+      ? 'Live pending — start API proxy'
+      : error
+        ? error.length > 64
+          ? `${error.slice(0, 61)}…`
+          : error
+        : loading
+          ? 'Updating…'
+          : lastOkAt || ticket.lastStatusAt
+            ? 'Live · up to date'
+            : 'Tap refresh for live gate & times';
 
   return (
     <View style={[styles.root, embedded && styles.embedded]}>
@@ -161,33 +219,68 @@ export function FlightBoardingPass({ ticket, onBack, onMenu, embedded }: Props) 
               <View
                 style={[
                   styles.statusPill,
-                  { backgroundColor: onTime ? 'rgba(0,230,118,0.2)' : 'rgba(255,140,60,0.25)' },
+                  journeyDone
+                    ? styles.statusPillDone
+                    : {
+                        backgroundColor: onTime
+                          ? 'rgba(0,230,118,0.2)'
+                          : 'rgba(255,140,60,0.25)',
+                      },
                 ]}
               >
                 <View
                   style={[
                     styles.dot,
-                    { backgroundColor: onTime ? GREEN : '#FF8C3C' },
+                    {
+                      backgroundColor: journeyDone
+                        ? '#fff'
+                        : onTime
+                          ? GREEN
+                          : '#FF8C3C',
+                    },
                   ]}
                 />
-                <Text style={[styles.statusPillText, { color: onTime ? GREEN : '#FFB07A' }]}>
-                  {statusLabel}
+                <Text
+                  style={[
+                    styles.statusPillText,
+                    {
+                      color: journeyDone
+                        ? '#fff'
+                        : onTime
+                          ? GREEN
+                          : '#FFB07A',
+                    },
+                  ]}
+                >
+                  {journeyDone ? 'Completed' : statusLabel}
                 </Text>
-                {onTime ? (
+                {journeyDone ? (
+                  <Ionicons name="checkmark-done" size={14} color="#fff" />
+                ) : onTime ? (
                   <Ionicons name="checkmark-circle" size={14} color={GREEN} />
                 ) : null}
               </View>
-              <Pressable style={styles.livePill} onPress={() => void refresh()}>
-                <View style={[styles.dot, { backgroundColor: GREEN }]} />
-                <Text style={styles.livePillText}>LIVE UPDATES</Text>
-                {loading ? (
-                  <ActivityIndicator size="small" color={GREEN} />
-                ) : (
-                  <Ionicons name="refresh" size={13} color={GREEN} />
-                )}
-              </Pressable>
+              {journeyDone ? (
+                <View style={[styles.livePill, styles.livePillDone]}>
+                  <Text style={[styles.livePillText, styles.livePillTextDone]}>
+                    Completed
+                  </Text>
+                </View>
+              ) : (
+                <Pressable style={styles.livePill} onPress={() => void refresh()}>
+                  <View style={[styles.dot, { backgroundColor: GREEN }]} />
+                  <Text style={styles.livePillText}>LIVE UPDATES</Text>
+                  {loading ? (
+                    <ActivityIndicator size="small" color={GREEN} />
+                  ) : (
+                    <Ionicons name="refresh" size={13} color={GREEN} />
+                  )}
+                </Pressable>
+              )}
             </View>
-            <Text style={styles.justNow}>{liveHint}</Text>
+            <Text style={[styles.justNow, journeyDone && styles.justNowDone]}>
+              {liveHint}
+            </Text>
 
             <Text style={styles.airlineName}>{airline}</Text>
             <View style={styles.airlineRow}>
@@ -212,6 +305,18 @@ export function FlightBoardingPass({ ticket, onBack, onMenu, embedded }: Props) 
           </View>
         </View>
 
+        {journeyDone ? (
+          <View style={styles.completedBanner}>
+            <Ionicons name="checkmark-circle" size={22} color="#fff" />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.completedBannerTitle}>Completed</Text>
+              <Text style={styles.completedBannerBody}>
+                Travel date finished · live updates are off
+              </Text>
+            </View>
+          </View>
+        ) : null}
+
         {/* Route */}
         <View style={styles.section}>
           <View style={styles.routeRow}>
@@ -222,7 +327,7 @@ export function FlightBoardingPass({ ticket, onBack, onMenu, embedded }: Props) 
                 {from.name}
               </Text>
               <Text style={styles.terminalLine}>Terminal {terminal}</Text>
-              <Text style={styles.dateBlue}>{formatDate(ticket.departureDate)}</Text>
+              <Text style={styles.dateBlue}>{formatDate(normalized.departureDate)}</Text>
               <Text style={styles.bigTime}>{depTime}</Text>
               {depIsLive ? (
                 <Text style={styles.liveTimeTag}>
@@ -254,7 +359,7 @@ export function FlightBoardingPass({ ticket, onBack, onMenu, embedded }: Props) 
               </Text>
               <Text style={styles.terminalLine}>Terminal {arrivalTerminal}</Text>
               <Text style={styles.dateBlue}>
-                {formatDate(ticket.arrivalDate || ticket.departureDate)}
+                {formatDate(normalized.arrivalDate || normalized.departureDate)}
               </Text>
               <Text style={styles.bigTime}>{arrTime}</Text>
               {arrIsLive ? (
@@ -313,44 +418,96 @@ export function FlightBoardingPass({ ticket, onBack, onMenu, embedded }: Props) 
           </View>
         </View>
 
-        {/* Live boarding details */}
-        <View style={styles.liveBox}>
-          <Text style={styles.liveBoxTitle}>Live boarding details</Text>
-          {!!error && (
+        {/* Live / completed boarding details */}
+        <View style={[styles.liveBox, journeyDone && styles.liveBoxDone]}>
+          <Text style={[styles.liveBoxTitle, journeyDone && styles.liveBoxTitleDone]}>
+            {journeyDone ? 'Completed' : 'Live boarding details'}
+          </Text>
+          {journeyDone ? (
+            <Text style={styles.liveDoneBody}>
+              This flight has already flown. Live gate and status updates are no
+              longer available.
+            </Text>
+          ) : null}
+          {!!error && !journeyDone && (
             <Text style={styles.liveError} numberOfLines={2}>
               {error}
             </Text>
           )}
           <View style={styles.liveGrid}>
             <View style={styles.liveCell}>
-              <MaterialCommunityIcons name="door" size={20} color={GREEN} />
+              <MaterialCommunityIcons
+                name="door"
+                size={20}
+                color={journeyDone ? DONE : GREEN}
+              />
               <Text style={styles.liveBig}>{boardingTime}</Text>
               <Text style={styles.liveSub}>Boarding</Text>
-              <View style={styles.liveTag}>
-                <View style={[styles.dot, { backgroundColor: GREEN }]} />
-                <Text style={styles.liveTagText}>LIVE</Text>
+              <View style={[styles.liveTag, journeyDone && styles.liveTagDone]}>
+                <View
+                  style={[
+                    styles.dot,
+                    { backgroundColor: journeyDone ? DONE : GREEN },
+                  ]}
+                />
+                <Text
+                  style={[
+                    styles.liveTagText,
+                    journeyDone && styles.liveTagTextDone,
+                  ]}
+                >
+                  {journeyDone ? 'Completed' : 'LIVE'}
+                </Text>
               </View>
             </View>
             <View style={styles.liveCell}>
-              <MaterialCommunityIcons name="airplane-takeoff" size={20} color={GREEN} />
-              <Text style={styles.liveBig}>{gate}</Text>
+              <MaterialCommunityIcons
+                name="airplane-takeoff"
+                size={20}
+                color={journeyDone ? DONE : GREEN}
+              />
+              <Text style={styles.liveBig}>{journeyDone ? gate === 'TBA' ? '—' : gate : gate}</Text>
               <Text style={styles.liveSub}>
-                {ticket.delayMinutes
-                  ? `Delay ${ticket.delayMinutes}m`
-                  : gate === 'TBA'
-                    ? 'Gate TBA'
-                    : 'Gate'}
+                {journeyDone
+                  ? 'Gate used'
+                  : ticket.delayMinutes
+                    ? `Delay ${ticket.delayMinutes}m`
+                    : gate === 'TBA'
+                      ? 'Gate TBA'
+                      : 'Gate'}
               </Text>
-              <View style={styles.liveTag}>
-                <View style={[styles.dot, { backgroundColor: GREEN }]} />
-                <Text style={styles.liveTagText}>LIVE</Text>
+              <View style={[styles.liveTag, journeyDone && styles.liveTagDone]}>
+                <View
+                  style={[
+                    styles.dot,
+                    { backgroundColor: journeyDone ? DONE : GREEN },
+                  ]}
+                />
+                <Text
+                  style={[
+                    styles.liveTagText,
+                    journeyDone && styles.liveTagTextDone,
+                  ]}
+                >
+                  {journeyDone ? 'Completed' : 'LIVE'}
+                </Text>
               </View>
             </View>
             <View style={styles.liveCell}>
-              <Ionicons name="time-outline" size={20} color={BLUE} />
+              <Ionicons
+                name="time-outline"
+                size={20}
+                color={journeyDone ? DONE : BLUE}
+              />
               <Text style={styles.liveBig}>{depTime}</Text>
               <Text style={styles.liveSub}>
-                {depIsLive ? 'Est. dep' : depFromApi ? 'Sched. dep' : 'Departure'}
+                {journeyDone
+                  ? 'Departed'
+                  : depIsLive
+                    ? 'Est. dep'
+                    : depFromApi
+                      ? 'Sched. dep'
+                      : 'Departure'}
               </Text>
             </View>
           </View>
@@ -372,11 +529,21 @@ export function FlightBoardingPass({ ticket, onBack, onMenu, embedded }: Props) 
 
         {/* Footer tip */}
         <View style={styles.footerTip}>
-          <Ionicons name="notifications-outline" size={18} color={BLUE} />
+          <Ionicons
+            name={journeyDone ? 'checkmark-circle-outline' : 'notifications-outline'}
+            size={18}
+            color={journeyDone ? DONE : BLUE}
+          />
           <Text style={styles.footerText}>
-            Arrive at the airport at least{' '}
-            <Text style={{ color: BLUE, fontFamily: 'Outfit_700Bold' }}>2 hours</Text> before
-            departure
+            {journeyDone ? (
+              'Archived boarding pass — kept for your travel history.'
+            ) : (
+              <>
+                Arrive at the airport at least{' '}
+                <Text style={{ color: BLUE, fontFamily: 'Outfit_700Bold' }}>2 hours</Text> before
+                departure
+              </>
+            )}
           </Text>
           <MaterialCommunityIcons name="bag-suitcase-outline" size={18} color={MUTED} />
         </View>
@@ -486,6 +653,10 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(0,230,118,0.35)',
   },
+  statusPillDone: {
+    backgroundColor: '#3D4A5C',
+    borderColor: 'rgba(255,255,255,0.35)',
+  },
   statusPillText: {
     fontFamily: 'Outfit_700Bold',
     fontSize: 11,
@@ -502,11 +673,20 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(0,230,118,0.4)',
   },
+  livePillDone: {
+    backgroundColor: '#3D4A5C',
+    borderColor: 'rgba(255,255,255,0.4)',
+  },
   livePillText: {
     fontFamily: 'Outfit_700Bold',
     fontSize: 10,
     color: GREEN,
     letterSpacing: 0.3,
+  },
+  livePillTextDone: {
+    color: '#fff',
+    fontSize: 11,
+    letterSpacing: 0.2,
   },
   justNow: {
     position: 'absolute',
@@ -515,6 +695,34 @@ const styles = StyleSheet.create({
     fontFamily: 'DMSans_400Regular',
     fontSize: 11,
     color: MUTED,
+  },
+  justNowDone: {
+    color: 'rgba(255,255,255,0.85)',
+  },
+  completedBanner: {
+    marginHorizontal: 16,
+    marginTop: 4,
+    marginBottom: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: '#2A3544',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.2)',
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+  },
+  completedBannerTitle: {
+    fontFamily: 'Outfit_700Bold',
+    fontSize: 18,
+    color: '#fff',
+    marginBottom: 2,
+  },
+  completedBannerBody: {
+    fontFamily: 'DMSans_400Regular',
+    fontSize: 13,
+    color: 'rgba(255,255,255,0.75)',
   },
   dot: { width: 6, height: 6, borderRadius: 3 },
   airlineName: {
@@ -762,10 +970,26 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,40,24,0.25)',
     padding: 14,
   },
+  liveBoxDone: {
+    borderColor: 'rgba(255,255,255,0.28)',
+    backgroundColor: 'rgba(42,53,68,0.95)',
+  },
   liveBoxTitle: {
     fontFamily: 'Outfit_700Bold',
     fontSize: 13,
     color: MUTED,
+    marginBottom: 12,
+  },
+  liveBoxTitleDone: {
+    fontSize: 18,
+    color: '#fff',
+    marginBottom: 8,
+  },
+  liveDoneBody: {
+    fontFamily: 'DMSans_400Regular',
+    fontSize: 13,
+    color: 'rgba(255,255,255,0.72)',
+    lineHeight: 18,
     marginBottom: 12,
   },
   liveError: {
@@ -799,10 +1023,17 @@ const styles = StyleSheet.create({
     gap: 4,
     marginTop: 2,
   },
+  liveTagDone: {
+    opacity: 0.9,
+  },
   liveTagText: {
     fontFamily: 'Outfit_700Bold',
     fontSize: 10,
     color: GREEN,
+  },
+  liveTagTextDone: {
+    color: '#fff',
+    fontSize: 11,
   },
   qrSection: {
     marginTop: 22,

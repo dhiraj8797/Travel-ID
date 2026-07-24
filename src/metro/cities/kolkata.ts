@@ -1,0 +1,76 @@
+import { buildMetroNetwork, LineDef } from '../buildNetwork';
+
+const lines: LineDef[] = [
+  {
+    id: 'blue',
+    name: 'Blue Line (Line 1)',
+    color: '#0078C8',
+    stops: [
+      ['dakshineswar', 'Dakshineswar', 22.6552, 88.3578],
+      ['baranagar', 'Baranagar', 22.6484, 88.3684],
+      ['noapara', 'Noapara', 22.6412, 88.3786],
+      ['dum_dum', 'Dum Dum', 22.6212, 88.3924],
+      ['belgachia', 'Belgachia', 22.6048, 88.3912],
+      ['shobhabazar_sutanuti', 'Shobhabazar Sutanuti', 22.5984, 88.3684, 'Shobhabazar'],
+      ['shyam_bazar', 'Shyambazar', 22.5948, 88.3748],
+      ['sovabazar', 'Sovabazar Ahiritola', 22.5912, 88.3612, 'Sovabazar'],
+      ['girish_park', 'Girish Park', 22.5868, 88.3648],
+      ['mahatma_gandhi_road', 'Mahatma Gandhi Road', 22.5812, 88.3584, 'MG Road'],
+      ['central', 'Central', 22.5748, 88.3524],
+      ['chandni_chowk', 'Chandni Chowk', 22.5684, 88.3512],
+      ['esplanade', 'Esplanade', 22.5648, 88.3518],
+      ['park_street', 'Park Street', 22.5548, 88.3512],
+      ['maidan', 'Maidan', 22.5484, 88.3486],
+      ['rabindra_sadan', 'Rabindra Sadan', 22.5412, 88.3484],
+      ['netaji_bhavan', 'Netaji Bhavan', 22.5348, 88.3486],
+      ['jatin_das_park', 'Jatin Das Park', 22.5284, 88.3484],
+      ['kalighat', 'Kalighat', 22.5212, 88.3468],
+      ['rabindra_sarobar', 'Rabindra Sarobar', 22.5084, 88.3486],
+      ['mahanayak_uday_shankar', 'Mahanayak Uttam Kumar', 22.4984, 88.3512, 'Mahanayak'],
+      ['netaji', 'Netaji', 22.4812, 88.3584],
+      ['masterda_surya_sen', 'Masterda Surya Sen', 22.4684, 88.3612, 'Surya Sen'],
+      ['gitanjali', 'Gitanjali', 22.4584, 88.3648],
+      ['kavi_nazrul', 'Kavi Nazrul', 22.4484, 88.3684],
+      ['shahid_khudiram', 'Shahid Khudiram', 22.4384, 88.3712],
+      ['kavi_subhash', 'Kavi Subhash', 22.4284, 88.3748],
+    ],
+  },
+  {
+    id: 'green',
+    name: 'Green Line (Line 2)',
+    color: '#43A047',
+    stops: [
+      ['howrah_maidan', 'Howrah Maidan', 22.5848, 88.3284],
+      ['howrah', 'Howrah', 22.5824, 88.3386],
+      ['mahakaran', 'Mahakaran', 22.5748, 88.3484],
+      ['esplanade', 'Esplanade', 22.5648, 88.3518],
+      ['sealdah', 'Sealdah', 22.5684, 88.3712],
+      ['phoolbagan', 'Phoolbagan', 22.5712, 88.3884],
+      ['salt_lake_stadium', 'Salt Lake Stadium', 22.5684, 88.4012, 'Salt Lake Stm'],
+      ['bengal_chemical', 'Bengal Chemical', 22.5748, 88.4086],
+      ['city_centre', 'City Centre I', 22.5812, 88.4184, 'City Centre'],
+      ['central_park', 'Central Park', 22.5848, 88.4286],
+      ['karunamoyee', 'Karunamoyee', 22.5884, 88.4384],
+      ['sector_v', 'Sector V', 22.5784, 88.4586],
+    ],
+  },
+  {
+    id: 'purple',
+    name: 'Purple Line (Line 3)',
+    color: '#8E24AA',
+    stops: [
+      ['joka', 'Joka', 22.4484, 88.2984],
+      ['thakurpukur', 'Thakurpukur', 22.4612, 88.3086],
+      ['sakherbazar', 'Sakherbazar', 22.4748, 88.3184],
+      ['behala_chowrasta', 'Behala Chowrasta', 22.4884, 88.3286, 'Behala Chow'],
+      ['behala_bazar', 'Behala Bazar', 22.4984, 88.3348],
+      ['taratala', 'Taratala', 22.5084, 88.3412],
+      ['majherhat', 'Majherhat', 22.5184, 88.3486],
+    ],
+  },
+];
+
+export const KOLKATA_METRO = buildMetroNetwork(
+  { id: 'ccu', name: 'Kolkata Metro', city: 'Kolkata', operator: 'Metro Railway / KMRC' },
+  lines
+);

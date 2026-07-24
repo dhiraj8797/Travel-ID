@@ -10,6 +10,8 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 import { LinearGradient } from 'expo-linear-gradient';
+import { getIndiaSkySnapshot } from '../../utils/indiaSky';
+import { HeadlightCone } from '../HeadlightCone';
 
 type Variant = 'rail' | 'bus';
 
@@ -18,8 +20,8 @@ type Props = {
 };
 
 const SCENES = {
-  rail: require('../../../assets/scenes/pass-bg-train.png'),
-  bus: require('../../../assets/scenes/pass-bg-bus.png'),
+  rail: require('../../../assets/scenes/pass-bg-train.jpg'),
+  bus: require('../../../assets/scenes/pass-bg-bus.jpg'),
 };
 
 const VEHICLES = {
@@ -29,14 +31,14 @@ const VEHICLES = {
 
 /**
  * Vehicles stay locked to the track/road band in the artwork (lower third)
- * and only slide horizontally — no floating mid-sky motion.
+ * and only slide horizontally — night headlamps light the surface after sunset.
  */
 export function PassSceneBackground({ variant }: Props) {
   const { width, height } = useWindowDimensions();
   const progress = useSharedValue(0);
+  const nightAmt = useSharedValue(getIndiaSkySnapshot().isNight ? 1 : 0);
+  const pulse = useSharedValue(0.55);
 
-  // Artwork has tracks/road in the lower ~22–28% of the frame.
-  // Anchor vehicle BOTTOM to that band so wheels sit on the surface.
   const surfaceFromBottom =
     variant === 'rail'
       ? Math.round(height * 0.205)
@@ -44,7 +46,6 @@ export function PassSceneBackground({ variant }: Props) {
 
   const vehicleWidth =
     variant === 'rail' ? Math.round(width * 1.2) : Math.round(width * 0.58);
-  // Transparent Vande Bharat PNG is ~9.5:1 after crop
   const vehicleHeight =
     variant === 'rail'
       ? Math.round(vehicleWidth / 9.5)
@@ -60,7 +61,22 @@ export function PassSceneBackground({ variant }: Props) {
       -1,
       false
     );
-  }, [progress, variant]);
+    pulse.value = withRepeat(
+      withTiming(1, { duration: 2400, easing: Easing.inOut(Easing.sin) }),
+      -1,
+      true
+    );
+  }, [progress, pulse, variant]);
+
+  useEffect(() => {
+    const sync = () => {
+      const snap = getIndiaSkySnapshot();
+      nightAmt.value = withTiming(snap.isNight ? 1 : 0, { duration: 900 });
+    };
+    sync();
+    const id = setInterval(sync, 30_000);
+    return () => clearInterval(id);
+  }, [nightAmt]);
 
   const vehicleStyle = useAnimatedStyle(() => {
     const t = progress.value;
@@ -82,6 +98,18 @@ export function PassSceneBackground({ variant }: Props) {
       transform: [{ translateX: x }],
     };
   });
+
+  const headlampStyle = useAnimatedStyle(() => ({
+    opacity: nightAmt.value * (0.7 + pulse.value * 0.3),
+  }));
+
+  const isRail = variant === 'rail';
+  const coneLength = isRail
+    ? Math.round(vehicleWidth * 0.22)
+    : Math.round(vehicleWidth * 0.48);
+  const coneSpread = isRail
+    ? Math.round(vehicleHeight * 0.85)
+    : Math.round(vehicleHeight * 0.42);
 
   return (
     <View style={StyleSheet.absoluteFill} pointerEvents="none">
@@ -118,6 +146,19 @@ export function PassSceneBackground({ variant }: Props) {
           vehicleStyle,
         ]}
       >
+        <Animated.View
+          style={[
+            styles.beamAnchor,
+            isRail ? styles.railAnchor : styles.busAnchor,
+            headlampStyle,
+          ]}
+        >
+          <HeadlightCone
+            length={coneLength}
+            spread={coneSpread}
+            tiltDeg={isRail ? 8 : 12}
+          />
+        </Animated.View>
         <Image
           source={VEHICLES[variant]}
           style={styles.vehicleImg}
@@ -130,7 +171,7 @@ export function PassSceneBackground({ variant }: Props) {
 
 const styles = StyleSheet.create({
   scene: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     width: '100%',
     height: '100%',
   },
@@ -143,5 +184,18 @@ const styles = StyleSheet.create({
   vehicleImg: {
     width: '100%',
     height: '100%',
+  },
+  beamAnchor: {
+    position: 'absolute',
+    zIndex: 2,
+  },
+  busAnchor: {
+    // Bumper headlight height — not cabin / driver seat
+    right: -2,
+    bottom: '2%',
+  },
+  railAnchor: {
+    right: 0,
+    bottom: '-4%',
   },
 });

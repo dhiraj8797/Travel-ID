@@ -13,10 +13,17 @@ expo-env.d.ts
 .kotlin/
 *.orig.*
 *.jks
+*.keystore
+!android/app/debug.keystore
 *.p8
 *.p12
 *.key
 *.mobileprovision
+android/keystore.properties
+playstore/secrets/
+dist/playstore/UPLOAD_KEY_BACKUP.txt
+dist/playstore/keystore.properties
+dist/playstore/*.keystore
 
 # Metro
 .metro-health-check*
@@ -45,3 +52,8 @@ server/data/
 
 # proxy logs
 server/*.log
+
+# local preview / scratch
+tmp-*.png
+tmp-*.html
+tmp-logo-intro-preview.html

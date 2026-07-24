@@ -1,4 +1,5 @@
-import React, { useEffect } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
+import { View } from 'react-native';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import * as SplashScreen from 'expo-splash-screen';
@@ -14,6 +15,7 @@ import {
   DMSans_700Bold,
 } from '@expo-google-fonts/dm-sans';
 import { AuthProvider } from '../src/auth/AuthContext';
+import { LogoSwooshIntro } from '../src/components/LogoSwooshIntro';
 import { TicketProvider } from '../src/context/TicketContext';
 import { loadApiProxyOverride, warmApiProxy } from '../src/services/apiProxy';
 import { colors } from '../src/theme';
@@ -29,6 +31,7 @@ export default function RootLayout() {
     DMSans_500Medium,
     DMSans_700Bold,
   });
+  const [introDone, setIntroDone] = useState(false);
 
   useEffect(() => {
     void (async () => {
@@ -41,7 +44,21 @@ export default function RootLayout() {
     if (loaded) SplashScreen.hideAsync().catch(() => undefined);
   }, [loaded]);
 
+  const onIntroFinished = useCallback(() => {
+    setIntroDone(true);
+  }, []);
+
   if (!loaded) return null;
+
+  // Intro first — homepage mounts only after animation completes
+  if (!introDone) {
+    return (
+      <View style={{ flex: 1, backgroundColor: '#FF8A3D' }}>
+        <StatusBar style="dark" />
+        <LogoSwooshIntro onFinished={onIntroFinished} />
+      </View>
+    );
+  }
 
   return (
     <AuthProvider>
@@ -60,7 +77,6 @@ export default function RootLayout() {
           <Stack.Screen name="login" options={{ headerShown: false, presentation: 'modal' }} />
           <Stack.Screen name="signup" options={{ headerShown: false, presentation: 'modal' }} />
           <Stack.Screen name="settings" options={{ headerShown: false }} />
-          <Stack.Screen name="import-gmail" options={{ headerShown: false }} />
           <Stack.Screen name="legal/[slug]" options={{ headerShown: false }} />
           <Stack.Screen name="add" options={{ title: 'Add ticket' }} />
           <Stack.Screen name="scan" options={{ title: 'Scan QR', presentation: 'modal' }} />

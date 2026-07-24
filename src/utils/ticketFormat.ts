@@ -1,8 +1,24 @@
 import { Ticket } from '../types/ticket';
 
+/**
+ * Hotel QR: opaque pass id only — no guest name, phone, email, or payment data.
+ * Desk apps can look up the pass by id after access checks.
+ */
+export function buildHotelPassQr(
+  ticket: Pick<Ticket, 'id' | 'bookingId' | 'pnr'>
+): string {
+  const passId = ticket.id || 'unknown';
+  const bookingRef = (ticket.bookingId || ticket.pnr || '').trim();
+  // Compact deep-link style payload (safe for offline wallets without a server)
+  return bookingRef
+    ? `travelid://hotel-pass/${passId}?bookingId=${encodeURIComponent(bookingRef)}`
+    : `travelid://hotel-pass/${passId}`;
+}
+
 /** Builds a scannable QR payload with all boarding-critical fields. */
 export function buildQrPayload(ticket: Pick<
   Ticket,
+  | 'id'
   | 'kind'
   | 'pnr'
   | 'bookingId'
@@ -29,7 +45,29 @@ export function buildQrPayload(ticket: Pick<
   | 'qrPayload'
   | 'reportingTime'
   | 'bookingPlatform'
+  | 'originalQrValue'
+  | 'metroNetworkId'
+  | 'metroFromStationId'
+  | 'metroToStationId'
 >): string {
+  if (ticket.kind === 'hotel') {
+    return buildHotelPassQr(ticket);
+  }
+
+  if (ticket.kind === 'metro') {
+    // Never invent a gate-valid QR. Guidance uses Travel ID deep-links only
+    // for wallet cards when no official QR exists — gate viewer refuses those.
+    if (ticket.originalQrValue?.trim()) return ticket.originalQrValue.trim();
+    if (
+      ticket.qrPayload?.trim() &&
+      !/^travelid:\/\//i.test(ticket.qrPayload.trim())
+    ) {
+      return ticket.qrPayload.trim();
+    }
+    // Placeholder for home-card thumbnail only (not shown at gate)
+    return `travelid://metro-pass/${ticket.id || 'unknown'}?guidance=1`;
+  }
+
   if (ticket.qrPayload && ticket.qrPayload.trim().length > 8) {
     return ticket.qrPayload.trim();
   }

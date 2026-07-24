@@ -21,16 +21,15 @@ import {
   clearApiProxyUrlOverride,
   getApiProxyUrl,
   getApiProxyUrlDefault,
+  proxyFetch,
   setApiProxyUrlOverride,
 } from '../services/apiProxy';
+import { AppPrefs, loadAppPrefs, saveAppPrefs } from '../services/appPrefs';
+import {
+  disarmAllArrivalAlarms,
+  stopArrivalAlarmSound,
+} from '../services/arrivalAlarm';
 import { colors, radii, spacing } from '../theme';
-
-const PREFS_KEY = 'wallet.ui.prefs';
-
-type Prefs = {
-  notifyTrips: boolean;
-  biometricsHint: boolean;
-};
 
 type Props = {
   showHeaderBack?: boolean;
@@ -42,25 +41,42 @@ export function SettingsPanel({ showHeaderBack }: Props) {
   const { tickets, seedDemoTickets, clearAllTickets } = useTickets();
   const [biometricsHint, setBiometricsHint] = useState(true);
   const [notifyTrips, setNotifyTrips] = useState(true);
+  const [alarmNotifications, setAlarmNotifications] = useState(true);
   const [proxyUrl, setProxyUrl] = useState(getApiProxyUrl());
   const [proxyBusy, setProxyBusy] = useState(false);
 
   useEffect(() => {
     void (async () => {
-      try {
-        const raw = await AsyncStorage.getItem(PREFS_KEY);
-        if (!raw) return;
-        const prefs = JSON.parse(raw) as Prefs;
-        if (typeof prefs.notifyTrips === 'boolean') setNotifyTrips(prefs.notifyTrips);
-        if (typeof prefs.biometricsHint === 'boolean') {
-          setBiometricsHint(prefs.biometricsHint);
-        }
-      } catch {
-        /* ignore */
-      }
+      const prefs = await loadAppPrefs();
+      setNotifyTrips(prefs.notifyTrips);
+      setBiometricsHint(prefs.biometricsHint);
+      setAlarmNotifications(prefs.alarmNotifications);
     })();
     setProxyUrl(getApiProxyUrl());
   }, []);
+
+  const persistPrefs = async (next: AppPrefs) => {
+    setNotifyTrips(next.notifyTrips);
+    setBiometricsHint(next.biometricsHint);
+    setAlarmNotifications(next.alarmNotifications);
+    try {
+      await saveAppPrefs(next);
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const onAlarmNotificationsChange = async (enabled: boolean) => {
+    await persistPrefs({
+      notifyTrips,
+      biometricsHint,
+      alarmNotifications: enabled,
+    });
+    if (!enabled) {
+      await stopArrivalAlarmSound();
+      await disarmAllArrivalAlarms();
+    }
+  };
 
   const saveProxyUrl = async () => {
     const next = proxyUrl.trim().replace(/\/$/, '');
@@ -89,38 +105,20 @@ export function SettingsPanel({ showHeaderBack }: Props) {
   };
 
   const testProxy = async () => {
-    const base = (proxyUrl.trim() || getApiProxyUrl()).replace(/\/$/, '');
-    if (!base) {
-      Alert.alert('Proxy', 'Enter a proxy URL first.');
-      return;
-    }
     try {
       setProxyBusy(true);
-      const res = await fetch(`${base}/health`);
+      const res = await proxyFetch('/health');
       const json = (await res.json()) as { ok?: boolean };
       if (res.ok && json.ok) {
-        Alert.alert('Proxy OK', `Reached ${base}`);
+        Alert.alert('Live data', 'Cloud connection is working.');
       } else {
-        Alert.alert('Proxy', `Unexpected response (${res.status})`);
+        Alert.alert('Live data', `Unexpected response (${res.status})`);
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Unreachable';
-      Alert.alert(
-        'Cannot reach proxy',
-        `${msg}\n\nPhone and PC must share Wi‑Fi. On PC run npm run proxy.\nTried: ${base}`
-      );
+      Alert.alert('Live data', msg);
     } finally {
       setProxyBusy(false);
-    }
-  };
-
-  const persistPrefs = async (next: Prefs) => {
-    setNotifyTrips(next.notifyTrips);
-    setBiometricsHint(next.biometricsHint);
-    try {
-      await AsyncStorage.setItem(PREFS_KEY, JSON.stringify(next));
-    } catch {
-      /* ignore */
     }
   };
 
@@ -270,25 +268,6 @@ export function SettingsPanel({ showHeaderBack }: Props) {
             onPress={() => router.push('/(tabs)/passes')}
           />
           <Row
-            icon="mail-outline"
-            label="Import from Gmail"
-            sub="Connect accounts · pull boarding passes in your name"
-            onPress={() => {
-              if (!session) {
-                Alert.alert(
-                  'Sign in required',
-                  'Sign in with Google first, then connect Gmail.',
-                  [
-                    { text: 'Cancel', style: 'cancel' },
-                    { text: 'Sign in', onPress: () => router.push('/login') },
-                  ]
-                );
-                return;
-              }
-              router.push('/import-gmail');
-            }}
-          />
-          <Row
             icon="flask-outline"
             label="Load sample tickets"
             sub="Demo bus & train passes"
@@ -354,11 +333,22 @@ export function SettingsPanel({ showHeaderBack }: Props) {
 
         <Section title="Preferences">
           <ToggleRow
+            icon="alarm-outline"
+            label="Alarm notifications"
+            sub="Station arrival alerts · 20 min before"
+            value={alarmNotifications}
+            onValueChange={(v) => void onAlarmNotificationsChange(v)}
+          />
+          <ToggleRow
             icon="notifications-outline"
             label="Trip reminders"
             value={notifyTrips}
             onValueChange={(v) =>
-              void persistPrefs({ notifyTrips: v, biometricsHint })
+              void persistPrefs({
+                notifyTrips: v,
+                biometricsHint,
+                alarmNotifications,
+              })
             }
           />
           <ToggleRow
@@ -366,44 +356,54 @@ export function SettingsPanel({ showHeaderBack }: Props) {
             label="Lock tips for wallet"
             value={biometricsHint}
             onValueChange={(v) =>
-              void persistPrefs({ notifyTrips, biometricsHint: v })
+              void persistPrefs({
+                notifyTrips,
+                biometricsHint: v,
+                alarmNotifications,
+              })
             }
           />
         </Section>
 
-        <Section title="Live data proxy">
+        <Section title="Live data">
           <View style={styles.proxyBlock}>
             <Text style={styles.proxyHint}>
-              Live data needs the PC proxy on the public internet (phone uses
-              mobile data). Run npm run proxy and npm run proxy:tunnel, then
-              paste the https://….trycloudflare.com URL here.
+              Train and flight live status uses Travel ID’s secure cloud proxy.
+              RailRadar and flight API keys never ship inside the app.
             </Text>
-            <TextInput
-              style={styles.proxyInput}
-              autoCapitalize="none"
-              autoCorrect={false}
-              keyboardType="url"
-              placeholder="https://….trycloudflare.com"
-              placeholderTextColor={colors.muted}
-              value={proxyUrl}
-              onChangeText={setProxyUrl}
-            />
-            <View style={styles.proxyActions}>
-              <Pressable
-                style={[styles.proxyBtn, proxyBusy && styles.proxyBtnDisabled]}
-                onPress={() => void saveProxyUrl()}
-                disabled={proxyBusy}
-              >
-                <Text style={styles.proxyBtnText}>Save</Text>
-              </Pressable>
-              <Pressable
-                style={[styles.proxyBtnGhost, proxyBusy && styles.proxyBtnDisabled]}
-                onPress={() => void testProxy()}
-                disabled={proxyBusy}
-              >
-                <Text style={styles.proxyBtnGhostText}>Test</Text>
-              </Pressable>
-            </View>
+            <Pressable
+              style={[styles.proxyBtnGhost, proxyBusy && styles.proxyBtnDisabled]}
+              onPress={() => void testProxy()}
+              disabled={proxyBusy}
+            >
+              <Text style={styles.proxyBtnGhostText}>
+                {proxyBusy ? 'Checking…' : 'Test live connection'}
+              </Text>
+            </Pressable>
+            {__DEV__ ? (
+              <>
+                <Text style={[styles.proxyHint, { marginTop: 8 }]}>
+                  Dev only — override proxy URL
+                </Text>
+                <TextInput
+                  style={styles.proxyInput}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  keyboardType="url"
+                  placeholder="https://your-proxy.example.com"
+                  placeholderTextColor={colors.muted}
+                  value={proxyUrl}
+                  onChangeText={setProxyUrl}
+                />
+                <Pressable
+                  style={[styles.proxyBtn, proxyBusy && styles.proxyBtnDisabled]}
+                  onPress={() => void saveProxyUrl()}
+                  disabled={proxyBusy}
+                >
+                  <Text style={styles.proxyBtnText}>Save override</Text>
+                </Pressable>
+              </>
+            ) : null}
           </View>
         </Section>
 
@@ -518,11 +518,13 @@ function Row({
 function ToggleRow({
   icon,
   label,
+  sub,
   value,
   onValueChange,
 }: {
   icon: React.ComponentProps<typeof Ionicons>['name'];
   label: string;
+  sub?: string;
   value: boolean;
   onValueChange: (v: boolean) => void;
 }) {
@@ -531,7 +533,10 @@ function ToggleRow({
       <View style={styles.iconWrap}>
         <Ionicons name={icon} size={20} color={colors.orange} />
       </View>
-      <Text style={[styles.rowLabel, { flex: 1 }]}>{label}</Text>
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Text style={styles.rowLabel}>{label}</Text>
+        {!!sub && <Text style={styles.rowSub}>{sub}</Text>}
+      </View>
       <Switch
         value={value}
         onValueChange={onValueChange}

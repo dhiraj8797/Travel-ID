@@ -4,6 +4,7 @@ import {
   armArrivalAlarm,
   disarmArrivalAlarm,
   isArrivalAlarmArmed,
+  silenceArrivalAlarm,
   stopArrivalAlarmSound,
   tickArrivalAlarm,
 } from '../services/arrivalAlarm';
@@ -49,11 +50,12 @@ export function useArrivalAlarm({
         pnr,
         stationName,
         stationCode,
-        minutesBefore: 5,
+        minutesBefore: 20,
       });
       if (!cancelled) {
         setSounding(status === 'sounding');
         if (status === 'disarmed') setArmed(false);
+        if (status === 'silenced') setSounding(false);
       }
     })();
     return () => {
@@ -76,17 +78,29 @@ export function useArrivalAlarm({
     }
     setBusy(true);
     try {
-      const result = await armArrivalAlarm({
-        ticketId,
-        trainNumber,
-        pnr,
-        stationName,
-        stationCode,
-        eta: expectedArrivalAt,
-        minutesBefore: 5,
-      });
+      const result = await armArrivalAlarm(
+        {
+          ticketId,
+          trainNumber,
+          pnr,
+          stationName,
+          stationCode,
+          eta: expectedArrivalAt,
+          minutesBefore: 20,
+        },
+        { fromUser: true, allowFireNow: true }
+      );
+      if (!result.ok) {
+        setArmed(false);
+        setSounding(false);
+        return {
+          ok: false as const,
+          reason: (result.reason || 'failed') as 'disabled' | 'failed',
+        };
+      }
       setArmed(true);
       if (result.reason === 'fired-now') setSounding(true);
+      else setSounding(false);
       return { ok: true as const, reason: result.reason };
     } finally {
       setBusy(false);
@@ -114,9 +128,19 @@ export function useArrivalAlarm({
   }, [ticketId]);
 
   const silence = useCallback(async () => {
-    await stopArrivalAlarmSound();
-    setSounding(false);
-  }, []);
+    if (!ticketId) {
+      await stopArrivalAlarmSound();
+      setSounding(false);
+      return;
+    }
+    setBusy(true);
+    try {
+      await silenceArrivalAlarm(ticketId);
+      setSounding(false);
+    } finally {
+      setBusy(false);
+    }
+  }, [ticketId]);
 
   return {
     armed,

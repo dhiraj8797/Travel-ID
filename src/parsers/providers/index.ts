@@ -5,6 +5,7 @@ import { TicketParser, detectTicketType } from './types';
 import { irctcParser } from './irctcParser';
 import { redBusParser, scapiaBusParser } from './busParsers';
 import { indigoParser } from './flightParsers';
+import { hotelParser, parseHotelBooking } from './hotelParsers';
 
 const genericParser: TicketParser = {
   name: 'GenericTicketParser',
@@ -13,6 +14,7 @@ const genericParser: TicketParser = {
   },
   parse(text) {
     const type = detectTicketType(text);
+    if (type === 'HOTEL') return parseHotelBooking(text);
     if (type === 'FLIGHT') return indigoParser.parse(text);
     if (type === 'BUS') {
       const draft = parseBusTicket(text);
@@ -30,6 +32,7 @@ const genericParser: TicketParser = {
 };
 
 export const ticketParsers: TicketParser[] = [
+  hotelParser,
   scapiaBusParser,
   redBusParser,
   irctcParser,

@@ -16,10 +16,13 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '../../src/auth/AuthContext';
 import { promptWalletSignIn } from '../../src/auth/requireWalletAccount';
 import { ActionCard } from '../../src/components/home/ActionCard';
+import { YearlyExpenseCard } from '../../src/components/home/YearlyExpenseCard';
+import { HomeMenuDrawer } from '../../src/components/HomeMenuDrawer';
 import { RecentPassCard } from '../../src/components/home/RecentPassCard';
 import { AnimatedTravelBackground } from '../../src/components/AnimatedTravelBackground';
 import { useTickets } from '../../src/context/TicketContext';
 import { PassengerNamesSheet } from '../../src/components/PassengerNamesSheet';
+import { useHomeLocation } from '../../src/hooks/useHomeLocation';
 import {
   fetchPnrDetails,
   passengersNeedNames,
@@ -35,7 +38,7 @@ import {
   getPassPhase,
 } from '../../src/utils/passTime';
 
-type Filter = 'all' | 'bus' | 'rail' | 'flight';
+type Filter = 'all' | 'bus' | 'rail' | 'flight' | 'hotel' | 'metro';
 
 export default function HomeScreen() {
   const router = useRouter();
@@ -48,6 +51,8 @@ export default function HomeScreen() {
   const [pnrOpen, setPnrOpen] = useState(false);
   const [pnrInput, setPnrInput] = useState('');
   const [nameDraft, setNameDraft] = useState<ParsedTicketDraft | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const homeLoc = useHomeLocation();
 
   const counts = useMemo(
     () => ({
@@ -55,6 +60,8 @@ export default function HomeScreen() {
       bus: tickets.filter((t) => t.kind === 'bus').length,
       rail: tickets.filter((t) => t.kind === 'rail').length,
       flight: tickets.filter((t) => t.kind === 'flight').length,
+      hotel: tickets.filter((t) => t.kind === 'hotel').length,
+      metro: tickets.filter((t) => t.kind === 'metro').length,
     }),
     [tickets]
   );
@@ -98,17 +105,17 @@ export default function HomeScreen() {
       return;
     }
     try {
-      setBusyLabel('Reading PDF…');
+      setBusyLabel('Reading booking with Gemini…');
       setUploading(true);
       const draft = await pickAndProcessPdf();
       if (!draft) return;
       setPendingDraft(draft);
       router.push('/review');
     } catch (error) {
-      Alert.alert(
-        'Upload PDF',
-        error instanceof Error ? error.message : 'Failed to read PDF'
-      );
+      const message =
+        error instanceof Error ? error.message : 'Failed to read PDF';
+      console.warn('[TravelID/PDF] upload alert:', message);
+      Alert.alert('Upload PDF', message);
     } finally {
       setUploading(false);
     }
@@ -192,7 +199,7 @@ export default function HomeScreen() {
       <SafeAreaView style={styles.safe} edges={['top']}>
         <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
           <View style={styles.header}>
-            <Pressable onPress={() => router.push('/settings')} hitSlop={8}>
+            <Pressable onPress={() => setMenuOpen(true)} hitSlop={8}>
               <Ionicons name="menu" size={32} color="#fff" />
             </Pressable>
             <View style={{ alignItems: 'center' }}>
@@ -211,7 +218,65 @@ export default function HomeScreen() {
 
           <Text style={styles.welcome}>Welcome back,</Text>
           <Text style={styles.name}>{displayName} 👋</Text>
-          <Text style={styles.subtitle}>All your travel passes,{'\n'}in one secure wallet.</Text>
+          <View style={styles.locationRow}>
+            <Pressable
+              style={styles.locationChip}
+              onPress={() => {
+                if (homeLoc.loading) return;
+                if (homeLoc.hasLocation) {
+                  Alert.alert(
+                    homeLoc.label || 'Location',
+                    'Update your city from GPS, or remove it from the home screen.',
+                    [
+                      { text: 'Cancel', style: 'cancel' },
+                      {
+                        text: 'Remove',
+                        style: 'destructive',
+                        onPress: () => void homeLoc.clear(),
+                      },
+                      {
+                        text: 'Refresh',
+                        onPress: () => void homeLoc.addOrRefresh(),
+                      },
+                    ]
+                  );
+                  return;
+                }
+                void homeLoc.addOrRefresh();
+              }}
+              accessibilityRole="button"
+              accessibilityLabel={
+                homeLoc.hasLocation
+                  ? `Location ${homeLoc.label}`
+                  : 'Add location'
+              }
+            >
+              {homeLoc.loading ? (
+                <ActivityIndicator size="small" color={colors.orange} />
+              ) : (
+                <Ionicons
+                  name={homeLoc.hasLocation ? 'location' : 'location-outline'}
+                  size={15}
+                  color={colors.orange}
+                />
+              )}
+              <Text style={styles.locationChipText} numberOfLines={1}>
+                {homeLoc.loading
+                  ? 'Finding you…'
+                  : homeLoc.hasLocation
+                    ? homeLoc.label
+                    : homeLoc.error
+                      ? 'Retry location'
+                      : 'Add location'}
+              </Text>
+              {!homeLoc.loading && !homeLoc.hasLocation ? (
+                <Ionicons name="add" size={14} color={colors.orange} />
+              ) : null}
+            </Pressable>
+            <Text style={styles.subtitle}>
+              All your travel passes,{'\n'}in one secure wallet.
+            </Text>
+          </View>
 
           <View style={styles.search}>
             <Ionicons name="search" size={20} color={colors.muted} />
@@ -225,44 +290,100 @@ export default function HomeScreen() {
             <Ionicons name="options-outline" size={20} color="#fff" />
           </View>
 
-          <View style={styles.filters}>
-            {(
-              [
-                { key: 'all', title: 'All', count: counts.all, color: colors.orange, icon: 'wallet' },
-                { key: 'bus', title: 'Bus', count: counts.bus, color: colors.orange, icon: 'bus' },
-                { key: 'rail', title: 'Train', count: counts.rail, color: colors.blue, icon: 'train' },
-                { key: 'flight', title: 'Flight', count: counts.flight, color: colors.purple, icon: 'flight' },
-              ] as const
-            ).map((f) => {
-              const selected = filter === f.key;
-              return (
-                <Pressable
-                  key={f.key}
-                  style={[
-                    styles.chip,
-                    selected && { backgroundColor: `${f.color}1F`, borderColor: f.color },
-                  ]}
-                  onPress={() => setFilter(f.key)}
-                >
-                  {f.icon === 'bus' || f.icon === 'train' ? (
-                    <MaterialCommunityIcons
-                      name={f.icon}
-                      size={18}
-                      color={selected ? f.color : '#fff'}
-                    />
-                  ) : (
-                    <Ionicons
-                      name={f.icon === 'flight' ? 'airplane' : 'wallet'}
-                      size={18}
-                      color={selected ? f.color : '#fff'}
-                    />
-                  )}
-                  <Text style={styles.chipTitle}>{f.title}</Text>
-                  <Text style={[styles.chipCount, { color: f.color }]}>{f.count}</Text>
-                </Pressable>
-              );
-            })}
+          <View style={styles.filterBlock}>
+            <Text style={styles.filterLabel}>Browse by type</Text>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.filters}
+            >
+              {(
+                [
+                  { key: 'all', title: 'All', count: counts.all, color: colors.orange, icon: 'wallet' as const },
+                  { key: 'bus', title: 'Bus', count: counts.bus, color: colors.bus, icon: 'bus' as const },
+                  { key: 'rail', title: 'Train', count: counts.rail, color: colors.blue, icon: 'train' as const },
+                  { key: 'flight', title: 'Flight', count: counts.flight, color: colors.purple, icon: 'flight' as const },
+                  { key: 'hotel', title: 'Hotel', count: counts.hotel, color: colors.hotel, icon: 'hotel' as const },
+                  { key: 'metro', title: 'Metro', count: counts.metro, color: colors.metro, icon: 'metro' as const },
+                ] as const
+              ).map((f) => {
+                const selected = filter === f.key;
+                const iconColor = selected ? '#fff' : f.color;
+                return (
+                  <Pressable
+                    key={f.key}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected }}
+                    accessibilityLabel={`${f.title}, ${f.count} passes`}
+                    style={[
+                      styles.chip,
+                      selected && {
+                        backgroundColor: f.color,
+                        borderColor: f.color,
+                        shadowColor: f.color,
+                        shadowOpacity: 0.35,
+                        shadowRadius: 10,
+                        shadowOffset: { width: 0, height: 4 },
+                        elevation: 6,
+                      },
+                    ]}
+                    onPress={() => setFilter(f.key)}
+                  >
+                    <View
+                      style={[
+                        styles.chipIconWrap,
+                        {
+                          backgroundColor: selected
+                            ? 'rgba(255,255,255,0.22)'
+                            : `${f.color}28`,
+                        },
+                      ]}
+                    >
+                      {f.icon === 'bus' || f.icon === 'train' ? (
+                        <MaterialCommunityIcons name={f.icon} size={18} color={iconColor} />
+                      ) : f.icon === 'hotel' ? (
+                        <MaterialCommunityIcons
+                          name="office-building"
+                          size={18}
+                          color={iconColor}
+                        />
+                      ) : f.icon === 'metro' ? (
+                        <MaterialCommunityIcons
+                          name="subway-variant"
+                          size={18}
+                          color={iconColor}
+                        />
+                      ) : (
+                        <Ionicons
+                          name={f.icon === 'flight' ? 'airplane' : 'wallet'}
+                          size={18}
+                          color={iconColor}
+                        />
+                      )}
+                    </View>
+                    <View style={styles.chipTextCol}>
+                      <Text
+                        style={[styles.chipTitle, selected && styles.chipTitleSelected]}
+                        numberOfLines={1}
+                      >
+                        {f.title}
+                      </Text>
+                      <Text
+                        style={[
+                          styles.chipCount,
+                          selected ? styles.chipCountSelected : { color: f.color },
+                        ]}
+                      >
+                        {f.count} {f.count === 1 ? 'pass' : 'passes'}
+                      </Text>
+                    </View>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
           </View>
+
+          <YearlyExpenseCard tickets={tickets} />
 
           <View style={styles.actions}>
             <ActionCard
@@ -289,10 +410,24 @@ export default function HomeScreen() {
             />
             <ActionCard
               title={uploading ? busyLabel : 'Upload PDF'}
-              description="PDF text or PNR API when a PNR is found."
+              description="Hotel, train, bus & flight PDFs • text or scanned."
               tone="blue"
               icon="pdf"
               onPress={onUploadPdf}
+              disabled={uploading}
+            />
+            <ActionCard
+              title="India Metro"
+              description="GPS picks your city · all stations · offline route + gate QR."
+              tone="metro"
+              icon="metro"
+              onPress={() => {
+                if (!session?.user?.id) {
+                  promptWalletSignIn(router);
+                  return;
+                }
+                router.push('/add');
+              }}
               disabled={uploading}
             />
             <ActionCard
@@ -361,7 +496,13 @@ export default function HomeScreen() {
           </Modal>
 
           <View style={styles.sectionHead}>
-            <Text style={styles.sectionTitle}>Recent Passes</Text>
+            <Text style={styles.sectionTitle}>
+              {filter === 'all'
+                ? 'Recent Passes'
+                : filter === 'rail'
+                  ? 'Train Passes'
+                  : `${filter.charAt(0).toUpperCase()}${filter.slice(1)} Passes`}
+            </Text>
             <Pressable onPress={() => router.push('/(tabs)/passes')}>
               <Text style={styles.viewAll}>View All ›</Text>
             </Pressable>
@@ -371,11 +512,17 @@ export default function HomeScreen() {
             <ActivityIndicator color={colors.orange} style={{ marginVertical: 24 }} />
           ) : recent.length === 0 ? (
             <View style={styles.empty}>
-              <Text style={styles.emptyTitle}>No passes yet</Text>
+              <Text style={styles.emptyTitle}>
+                {filter === 'all' && !query.trim()
+                  ? 'No passes yet'
+                  : 'No matching passes'}
+              </Text>
               <Text style={styles.emptyBody}>
-                {canEditWallet
-                  ? 'Tap Fetch by PNR for the fastest import. Or use photo/PDF/QR.'
-                  : 'Sign in with Google to save passes to your account. Existing passes on this phone move to your account on first sign-in.'}
+                {filter !== 'all'
+                  ? `You don’t have any ${filter === 'rail' ? 'train' : filter} passes yet. Try All, or add one below.`
+                  : canEditWallet
+                    ? 'Tap Fetch by PNR for the fastest import. Or use photo/PDF/QR.'
+                    : 'Sign in with Google to save passes to your account. Existing passes on this phone move to your account on first sign-in.'}
               </Text>
               {canEditWallet ? (
                 <Pressable
@@ -406,6 +553,8 @@ export default function HomeScreen() {
           )}
         </ScrollView>
       </SafeAreaView>
+
+      <HomeMenuDrawer visible={menuOpen} onClose={() => setMenuOpen(false)} />
     </View>
   );
 }
@@ -442,13 +591,40 @@ const styles = StyleSheet.create({
     color: colors.orange,
     marginTop: 2,
   },
-  subtitle: {
-    fontFamily: 'DMSans_400Regular',
-    fontSize: 16,
-    lineHeight: 23,
-    color: '#fff',
-    marginTop: 8,
+  locationRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginTop: 10,
     marginBottom: 120,
+  },
+  locationChip: {
+    flexShrink: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,104,0,0.14)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,104,0,0.35)',
+    maxWidth: '48%',
+  },
+  locationChipText: {
+    fontFamily: 'DMSans_700Bold',
+    fontSize: 13,
+    color: colors.orange,
+    flexShrink: 1,
+  },
+  subtitle: {
+    flex: 1,
+    fontFamily: 'DMSans_400Regular',
+    fontSize: 14,
+    lineHeight: 20,
+    color: '#fff',
+    textAlign: 'right',
   },
   search: {
     height: 58,
@@ -468,29 +644,58 @@ const styles = StyleSheet.create({
     fontFamily: 'DMSans_400Regular',
     fontSize: 14,
   },
-  filters: {
-    flexDirection: 'row',
-    gap: 8,
+  filterBlock: {
     marginBottom: 22,
   },
+  filterLabel: {
+    fontFamily: 'DMSans_700Bold',
+    fontSize: 13,
+    color: colors.muted,
+    marginBottom: 10,
+    letterSpacing: 0.2,
+  },
+  filters: {
+    flexDirection: 'row',
+    gap: 10,
+    paddingRight: 4,
+  },
   chip: {
-    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    minWidth: 118,
     borderRadius: 18,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.13)',
-    backgroundColor: 'rgba(255,255,255,0.05)',
+    borderColor: 'rgba(255,255,255,0.12)',
+    backgroundColor: 'rgba(12, 25, 47, 0.92)',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+  },
+  chipIconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
     alignItems: 'center',
-    paddingVertical: 12,
-    gap: 2,
+    justifyContent: 'center',
+  },
+  chipTextCol: {
+    gap: 1,
+    paddingRight: 2,
   },
   chipTitle: {
-    fontFamily: 'DMSans_700Bold',
-    fontSize: 12,
+    fontFamily: 'Outfit_700Bold',
+    fontSize: 14,
+    color: '#fff',
+  },
+  chipTitleSelected: {
     color: '#fff',
   },
   chipCount: {
-    fontFamily: 'Outfit_700Bold',
-    fontSize: 12,
+    fontFamily: 'DMSans_400Regular',
+    fontSize: 11,
+  },
+  chipCountSelected: {
+    color: 'rgba(255,255,255,0.88)',
   },
   actions: {
     flexDirection: 'row',

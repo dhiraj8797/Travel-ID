@@ -80,6 +80,15 @@ const busBase = {
       deck: 'Upper',
       status: 'Confirmed',
     },
+    {
+      name: 'Ms. Ananya Sharma',
+      age: '24',
+      gender: 'FEMALE',
+      seat: 'L10',
+      seatType: 'Lower sleeper',
+      deck: 'Lower',
+      status: 'Confirmed',
+    },
   ],
   fare: '825',
   amenities: [
@@ -138,6 +147,66 @@ const flightBase = {
   createdAt: new Date().toISOString(),
 };
 
+const hotelBase = {
+  id: 'demo-hotel-1',
+  kind: 'hotel' as const,
+  source: 'demo' as const,
+  title: 'Sunset Palace Hotel & Resort',
+  operator: 'Sunset Palace',
+  hotelName: 'Sunset Palace Hotel & Resort',
+  hotelAddress:
+    'Sunset Palace Hotel & Resort, Beach Road, Visakhapatnam, Andhra Pradesh 530001',
+  hotelEmail: 'info@sunsetpalace.com',
+  hotelTagline: 'YOUR STAY, OUR PRIVILEGE.',
+  bookingPlatform: 'MakeMyTrip',
+  bookingStatus: 'Confirmed',
+  pnr: 'SPH572839',
+  bookingId: 'SPH572839',
+  bookingDate: '18 Jul, 2026 | 11:20 AM',
+  from: 'Visakhapatnam',
+  to: 'Sunset Palace Hotel & Resort',
+  departureDate: '21 May 2025',
+  departureTime: '02:00 PM',
+  arrivalDate: '25 May 2025',
+  arrivalTime: '11:00 AM',
+  roomType: 'Deluxe Room',
+  mealPlan: 'CP',
+  starRating: '★★★★★',
+  classType: 'Deluxe Room',
+  operatorContact: '+91 891-123-4567',
+  supportNumber: '+91 891-123-4567',
+  passengers: [
+    {
+      name: 'Dhiraj Kumar',
+      age: '27',
+      gender: 'M',
+      status: 'Confirmed',
+    },
+    {
+      name: 'Priya Kumar',
+      gender: 'F',
+      status: 'Confirmed',
+    },
+    {
+      name: 'Aarav Kumar',
+      age: '5',
+      gender: 'M',
+      status: 'Confirmed',
+    },
+  ],
+  fare: '12,800',
+  amenities: [
+    { name: 'Free Wi-Fi', available: true },
+    { name: 'Breakfast Included', available: true },
+    { name: '24x7 Front Desk', available: true },
+    { name: 'Secure Stay', available: true },
+    { name: 'Airport Transfer', available: true },
+  ],
+  boardingInstructions:
+    'Show this QR code at the hotel front desk. Present a valid ID proof at check-in.',
+  createdAt: new Date().toISOString(),
+};
+
 export const DEMO_TICKETS: Ticket[] = [
   { ...railBase, qrPayload: buildQrPayload(railBase) },
   {
@@ -149,5 +218,10 @@ export const DEMO_TICKETS: Ticket[] = [
     ...flightBase,
     originalQrValue: DEMO_FLIGHT_BCBP,
     qrPayload: DEMO_FLIGHT_BCBP,
+  },
+  {
+    ...hotelBase,
+    originalQrValue: buildQrPayload(hotelBase),
+    qrPayload: buildQrPayload(hotelBase),
   },
 ];

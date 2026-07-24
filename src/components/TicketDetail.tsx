@@ -2,6 +2,8 @@ import React from 'react';
 import { Ticket } from '../types/ticket';
 import { BusBoardingPass } from './passes/BusBoardingPass';
 import { FlightBoardingPass } from './passes/FlightBoardingPass';
+import { HotelBoardingPass } from './passes/HotelBoardingPass';
+import { MetroBoardingPass } from './passes/MetroBoardingPass';
 import { TrainBoardingPass } from './passes/TrainBoardingPass';
 
 type Props = {
@@ -11,7 +13,7 @@ type Props = {
   embedded?: boolean;
 };
 
-/** Full ticket pass UI — train/bus/flight boarding passes. */
+/** Full ticket pass UI — train / bus / flight / hotel / metro. */
 export function TicketPass({ ticket, onBack, onMenu, embedded }: Props) {
   if (ticket.kind === 'rail') {
     return (
@@ -26,6 +28,26 @@ export function TicketPass({ ticket, onBack, onMenu, embedded }: Props) {
   if (ticket.kind === 'bus') {
     return (
       <BusBoardingPass
+        ticket={ticket}
+        onBack={onBack}
+        onMenu={onMenu}
+        embedded={embedded}
+      />
+    );
+  }
+  if (ticket.kind === 'hotel') {
+    return (
+      <HotelBoardingPass
+        ticket={ticket}
+        onBack={onBack}
+        onMenu={onMenu}
+        embedded={embedded}
+      />
+    );
+  }
+  if (ticket.kind === 'metro') {
+    return (
+      <MetroBoardingPass
         ticket={ticket}
         onBack={onBack}
         onMenu={onMenu}

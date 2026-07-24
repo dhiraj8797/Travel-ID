@@ -24,7 +24,7 @@ import {
 } from '../../src/utils/passTime';
 
 type TimeFilter = PassPhase;
-type KindFilter = 'all' | 'bus' | 'rail' | 'flight';
+type KindFilter = 'all' | 'bus' | 'rail' | 'flight' | 'hotel' | 'metro';
 
 export default function PassesScreen() {
   const router = useRouter();
@@ -113,6 +113,8 @@ export default function PassesScreen() {
               { key: 'bus', label: 'Bus' },
               { key: 'rail', label: 'Train' },
               { key: 'flight', label: 'Flight' },
+              { key: 'hotel', label: 'Hotel' },
+              { key: 'metro', label: 'Metro' },
             ] as const
           ).map((f) => {
             const active = kindFilter === f.key;

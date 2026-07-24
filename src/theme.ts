@@ -38,6 +38,10 @@ export const colors = {
   navySoft: '#243047',
   bgWarm: '#06101F',
   card: '#0C192F',
+  hotel: '#0F766E',
+  hotelSoft: 'rgba(15,118,110,0.14)',
+  metro: '#9B2D8E',
+  metroSoft: 'rgba(155,45,142,0.14)',
 };
 
 export const spacing = {

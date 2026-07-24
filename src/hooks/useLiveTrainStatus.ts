@@ -8,6 +8,7 @@ import {
   getExpectedArrivalDate,
   LiveTrainStatus,
   minutesUntil,
+  resolveActiveLivePlatform,
   resolveBoardingLiveTimes,
 } from '../services/railRadar';
 import {
@@ -244,6 +245,11 @@ export function useLiveTrainQuery(query: LiveTrainQuery) {
     const copy = livePhaseCopy(phase, window);
     const boardingPlatform =
       state.times?.fromPlatform || query.platform || undefined;
+    const activePf = resolveActiveLivePlatform(state.live, boardingPlatform);
+    const activePlatform = activePf.platform || boardingPlatform;
+    const activePlatformStation =
+      activePf.stationCode || activePf.stationName || undefined;
+    const activePlatformPhase = activePf.phase;
 
     // Waiting window — no API payload yet
     if (
@@ -259,6 +265,8 @@ export function useLiveTrainQuery(query: LiveTrainQuery) {
         boardingPlatform: query.platform,
         arrivalPlatform: undefined as string | undefined,
         activePlatform: query.platform,
+        activePlatformStation: undefined as string | undefined,
+        activePlatformPhase: 'origin' as const,
         isLive: false,
         speedKmh: undefined as number | undefined,
         startDate: undefined as string | undefined,
@@ -291,6 +299,8 @@ export function useLiveTrainQuery(query: LiveTrainQuery) {
         boardingPlatform: query.platform,
         arrivalPlatform: undefined as string | undefined,
         activePlatform: query.platform,
+        activePlatformStation: undefined as string | undefined,
+        activePlatformPhase: 'origin' as const,
         isLive: false,
         speedKmh: undefined as number | undefined,
         startDate: state.live?.startDate,
@@ -322,6 +332,8 @@ export function useLiveTrainQuery(query: LiveTrainQuery) {
         boardingPlatform: query.platform,
         arrivalPlatform: undefined as string | undefined,
         activePlatform: query.platform,
+        activePlatformStation: undefined as string | undefined,
+        activePlatformPhase: 'origin' as const,
         isLive: false,
         speedKmh: undefined as number | undefined,
         startDate: undefined as string | undefined,
@@ -360,7 +372,9 @@ export function useLiveTrainQuery(query: LiveTrainQuery) {
           'Train has not started from origin. Route and platforms below.',
         boardingPlatform,
         arrivalPlatform: undefined as string | undefined,
-        activePlatform: boardingPlatform,
+        activePlatform,
+        activePlatformStation,
+        activePlatformPhase,
         isLive: Boolean(state.live.isLive),
         speedKmh: undefined as number | undefined,
         startDate: state.live.startDate,
@@ -411,7 +425,9 @@ export function useLiveTrainQuery(query: LiveTrainQuery) {
       locationLabel: state.live.locationLabel,
       boardingPlatform,
       arrivalPlatform: undefined as string | undefined,
-      activePlatform: boardingPlatform,
+      activePlatform,
+      activePlatformStation,
+      activePlatformPhase,
       isLive: state.live.isLive,
       speedKmh: undefined as number | undefined,
       startDate: state.live.startDate,

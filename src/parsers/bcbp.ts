@@ -72,20 +72,79 @@ export function looksLikeBoardingPassBarcode(raw: string): boolean {
   return false;
 }
 
+/**
+ * BCBP stores day-of-year only (no year).
+ * Resolve year for a travel wallet that holds both upcoming trips and archives:
+ * - Prefer a date within the next ~6 weeks (imminent travel)
+ * - Otherwise prefer the most recent past occurrence (old boarding passes)
+ * - Fall back to nearest future within a year
+ */
 function julianToIso(julian: number, ref = new Date()): string | undefined {
   if (!Number.isFinite(julian) || julian < 1 || julian > 366) return undefined;
-  const year = ref.getFullYear();
-  const tryYear = (y: number) => {
-    const d = new Date(Date.UTC(y, 0, julian));
-    return d.toISOString().slice(0, 10);
-  };
-  const iso = tryYear(year);
-  const today = new Date();
-  const candidate = new Date(`${iso}T12:00:00Z`);
-  const diffDays = (today.getTime() - candidate.getTime()) / 86400000;
-  if (diffDays > 120) return tryYear(year + 1);
-  if (diffDays < -240) return tryYear(year - 1);
-  return iso;
+
+  const refY = ref.getUTCFullYear();
+  const todayUtc = Date.UTC(ref.getUTCFullYear(), ref.getUTCMonth(), ref.getUTCDate());
+
+  const candidates: { iso: string; deltaDays: number }[] = [];
+  for (let y = refY - 5; y <= refY + 1; y++) {
+    // UTC Jan 1 + (julian-1) days — Julian day 1 = Jan 1
+    const t = Date.UTC(y, 0, 1) + (julian - 1) * 86_400_000;
+    const d = new Date(t);
+    // Guard invalid leap-day (e.g. julian 366 in non-leap year rolls over)
+    if (y % 4 !== 0 && julian === 366) continue;
+    const iso = d.toISOString().slice(0, 10);
+    const dayUtc = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+    candidates.push({
+      iso,
+      deltaDays: (dayUtc - todayUtc) / 86_400_000,
+    });
+  }
+  if (!candidates.length) return undefined;
+
+  // Imminent / current trip: yesterday … +45 days
+  const soon = candidates
+    .filter((c) => c.deltaDays >= -1 && c.deltaDays <= 45)
+    .sort((a, b) => a.deltaDays - b.deltaDays);
+  if (soon.length) return soon[0].iso;
+
+  // Archived boarding pass: most recent date already flown
+  const past = candidates
+    .filter((c) => c.deltaDays < -1)
+    .sort((a, b) => b.deltaDays - a.deltaDays);
+  if (past.length) return past[0].iso;
+
+  // Far-future booking: nearest upcoming within a year
+  const future = candidates
+    .filter((c) => c.deltaDays > 45)
+    .sort((a, b) => a.deltaDays - b.deltaDays);
+  return future[0]?.iso;
+}
+
+/** Try to find an explicit year in optional / free-text barcode data. */
+function yearHintFromPayload(raw: string): number | undefined {
+  const years = [
+    ...normalizeBcbpInput(raw).matchAll(/\b(20[12]\d)\b/g),
+  ].map((m) => Number(m[1]));
+  const nowY = new Date().getFullYear();
+  const plausible = years.filter((y) => y >= 2015 && y <= nowY + 1);
+  if (!plausible.length) return undefined;
+  // Prefer an explicit past year when archiving old passes
+  const past = plausible.filter((y) => y < nowY).sort((a, b) => b - a);
+  if (past.length) return past[0];
+  return Math.min(...plausible);
+}
+
+function julianToIsoWithHint(
+  julian: number,
+  raw: string,
+  ref = new Date()
+): string | undefined {
+  const hint = yearHintFromPayload(raw);
+  if (hint != null) {
+    const t = Date.UTC(hint, 0, 1) + (julian - 1) * 86_400_000;
+    return new Date(t).toISOString().slice(0, 10);
+  }
+  return julianToIso(julian, ref);
 }
 
 function cabinLabel(code?: string): string | undefined {
@@ -298,7 +357,7 @@ function fieldsToDraft(
   raw: string,
   barcodeType?: string
 ): ParsedTicketDraft {
-  const departureIso = julianToIso(fields.julian);
+  const departureIso = julianToIsoWithHint(fields.julian, raw);
   const departureDate =
     formatJourneyDateLabel(departureIso) || departureIso || 'TBD';
   const flightNumber = `${fields.airlineCode}${fields.flightDigits}`;
@@ -308,13 +367,15 @@ function fieldsToDraft(
   const toMeta = airportMeta(fields.toCode, fields.toCode);
   const payload = normalizeBcbpInput(raw) || raw.trim();
   const name = fields.passengerName || 'Traveller';
+  const yearGuessed = !yearHintFromPayload(raw);
 
   return {
     kind: 'flight',
     source: 'qr',
     extractionMethod: 'qr',
-    extractionNote:
-      'Parsed IATA boarding-pass barcode (BCBP). Times are not in the barcode — add them or tap LIVE UPDATES / edit on Review.',
+    extractionNote: yearGuessed
+      ? 'Boarding barcode has day-of-year only (no year). Year was estimated — edit the travel date on Review if it should be an older trip (e.g. 2023).'
+      : 'Parsed IATA boarding-pass barcode (BCBP). Times are not in the barcode — add them or tap LIVE UPDATES / edit on Review.',
     title: flightNumber,
     operator,
     airlineCode: fields.airlineCode,

@@ -15,6 +15,10 @@ import {
   saveTicketsForUser,
   upsertTicketForUser,
 } from '../storage/tickets';
+import {
+  deleteTicketLocalFiles,
+  deleteTicketsLocalFiles,
+} from '../storage/ticketFiles';
 import { ParsedTicketDraft, Ticket } from '../types/ticket';
 import { buildQrPayload } from '../utils/ticketFormat';
 import {
@@ -23,9 +27,24 @@ import {
 } from '../utils/flightIdentity';
 import { isBcbpPayload } from '../parsers/bcbp';
 import { boardingCodeRaw, createBoardingCode } from '../utils/boardingCode';
+import {
+  applyCompletedIfPast,
+  coerceFlightArchiveDate,
+  repairFalseCompletedFlags,
+} from '../utils/passTime';
 
 /** Prefer airline boarding payload; never overwrite BCBP with a Travel ID QR. */
 function resolveQrPayload(ticket: Ticket): string {
+  // Hotel: always opaque pass-id QR (never embed guest / contact PII)
+  if (ticket.kind === 'hotel') {
+    return buildQrPayload(ticket);
+  }
+  // Metro: prefer scanned Namma Metro / gate QR when present
+  if (ticket.kind === 'metro') {
+    const original = ticket.originalQrValue?.trim();
+    if (original) return original;
+    return buildQrPayload(ticket);
+  }
   const boarding = boardingCodeRaw(ticket);
   if (boarding) return boarding;
   const original = ticket.originalQrValue?.trim();
@@ -47,11 +66,6 @@ type TicketContextValue = {
   /** False when signed out — wallet is account-only. */
   canEditWallet: boolean;
   addFromDraft: (draft: ParsedTicketDraft) => Promise<Ticket>;
-  /** Import drafts, skipping PNR/bookingId duplicates already in the wallet. */
-  importDraftsIfNew: (drafts: ParsedTicketDraft[]) => Promise<{
-    added: number;
-    skipped: number;
-  }>;
   updateTicket: (ticket: Ticket) => Promise<void>;
   deleteTicket: (id: string) => Promise<void>;
   clearAllTickets: () => Promise<void>;
@@ -78,7 +92,23 @@ export function TicketProvider({ children }: { children: React.ReactNode }) {
       try {
         const stored = await loadTicketsForUser(userId);
         if (!mounted) return;
-        setTickets(stored);
+        const migrated = stored.map((t) =>
+          applyCompletedIfPast(
+            repairFalseCompletedFlags(coerceFlightArchiveDate(t))
+          )
+        );
+        const changed = migrated.some(
+          (t, i) =>
+            t.journeyCompleted !== stored[i].journeyCompleted ||
+            t.bookingStatus !== stored[i].bookingStatus ||
+            t.departureDate !== stored[i].departureDate ||
+            t.flightStatus !== stored[i].flightStatus
+        );
+        if (changed && userId) {
+          await saveTicketsForUser(userId, migrated);
+        }
+        if (!mounted) return;
+        setTickets(migrated);
       } finally {
         if (mounted) setLoading(false);
       }
@@ -130,7 +160,7 @@ export function TicketProvider({ children }: { children: React.ReactNode }) {
         };
       }
 
-      const ticket: Ticket = {
+      let ticket: Ticket = applyCompletedIfPast({
         ...normalized,
         id: createId(),
         createdAt: new Date().toISOString(),
@@ -143,7 +173,7 @@ export function TicketProvider({ children }: { children: React.ReactNode }) {
             hour: 'numeric',
             minute: '2-digit',
           }),
-      };
+      });
       if (
         ticket.kind === 'flight' &&
         !ticket.boardingCode?.rawValue &&
@@ -155,39 +185,12 @@ export function TicketProvider({ children }: { children: React.ReactNode }) {
         );
       }
       ticket.qrPayload = resolveQrPayload(ticket);
+      ticket = applyCompletedIfPast(ticket);
       const next = await upsertTicketForUser(uid, ticket);
       if (userIdRef.current === uid) setTickets(next);
       return ticket;
     },
     [requireUser]
-  );
-
-  const importDraftsIfNew = useCallback(
-    async (drafts: ParsedTicketDraft[]) => {
-      let added = 0;
-      let skipped = 0;
-      for (const draft of drafts) {
-        const uid = requireUser();
-        const existing = await loadTicketsForUser(uid);
-        const pnr = (draft.pnr || '').trim().toUpperCase();
-        const booking = (draft.bookingId || '').trim().toUpperCase();
-        const dup = existing.some((t) => {
-          const tp = (t.pnr || '').trim().toUpperCase();
-          const tb = (t.bookingId || '').trim().toUpperCase();
-          if (pnr && tp && pnr === tp) return true;
-          if (booking && tb && booking === tb) return true;
-          return false;
-        });
-        if (dup) {
-          skipped += 1;
-          continue;
-        }
-        await addFromDraft({ ...draft, source: draft.source || 'email' });
-        added += 1;
-      }
-      return { added, skipped };
-    },
-    [requireUser, addFromDraft]
   );
 
   const updateTicket = useCallback(
@@ -208,17 +211,21 @@ export function TicketProvider({ children }: { children: React.ReactNode }) {
   const deleteTicket = useCallback(
     async (id: string) => {
       const uid = requireUser();
+      const doomed = tickets.find((t) => t.id === id);
       const next = await removeTicketForUser(uid, id);
       if (userIdRef.current === uid) setTickets(next);
+      void deleteTicketLocalFiles(doomed);
     },
-    [requireUser]
+    [requireUser, tickets]
   );
 
   const clearAllTickets = useCallback(async () => {
     const uid = requireUser();
+    const snapshot = tickets;
     await saveTicketsForUser(uid, []);
     if (userIdRef.current === uid) setTickets([]);
-  }, [requireUser]);
+    void deleteTicketsLocalFiles(snapshot);
+  }, [requireUser, tickets]);
 
   const seedDemoTickets = useCallback(async () => {
     const uid = requireUser();
@@ -241,7 +248,6 @@ export function TicketProvider({ children }: { children: React.ReactNode }) {
       loading: loading || authLoading,
       canEditWallet: !!userId,
       addFromDraft,
-      importDraftsIfNew,
       updateTicket,
       deleteTicket,
       clearAllTickets,
@@ -254,7 +260,6 @@ export function TicketProvider({ children }: { children: React.ReactNode }) {
       authLoading,
       userId,
       addFromDraft,
-      importDraftsIfNew,
       updateTicket,
       deleteTicket,
       clearAllTickets,

@@ -1,5 +1,7 @@
 import React from 'react';
 import {
+  ActivityIndicator,
+  Linking,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -10,9 +12,11 @@ import {
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import QRCode from 'react-native-qrcode-svg';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useBusJourney } from '../../hooks/useBusJourney';
 import { Ticket } from '../../types/ticket';
 import { buildQrPayload } from '../../utils/ticketFormat';
 import { PassSceneBackground } from './PassSceneBackground';
+import { useSecureScreen } from '../../hooks/useSecureScreen';
 
 const Navy = '#07132D';
 const Orange = '#FF6500';
@@ -35,9 +39,11 @@ export function BusBoardingPass({ ticket, onBack, onMenu, embedded }: Props) {
   const insets = useSafeAreaInsets();
   const contentWidth = Math.min(width - 20, 420);
   const compact = height < 780;
+  useSecureScreen(true);
   const qrSize = compact ? 78 : 92;
+  const journey = useBusJourney(ticket);
 
-  const pax = ticket.passengers?.[0];
+  const passengers = ticket.passengers?.length ? ticket.passengers : [];
   const pnr = ticket.pnr || ticket.bookingId || '—';
   const qr = ticket.originalQrValue?.trim() || buildQrPayload(ticket);
   const bookingDate =
@@ -55,8 +61,12 @@ export function BusBoardingPass({ ticket, onBack, onMenu, embedded }: Props) {
   const boarding = ticket.boardingPoint || ticket.from || '—';
   const dropping = ticket.droppingPoint || ticket.to || '—';
   const busType = ticket.classType || ticket.serviceName || 'Bus';
-  const seat = pax?.seat || '—';
-  const seatType = pax?.seatType || pax?.deck || 'Confirmed';
+  const seats = passengers.map((p) => p.seat).filter(Boolean) as string[];
+  const seat = seats.length ? seats.join(', ') : '—';
+  const seatType =
+    passengers.find((p) => p.seatType || p.deck)?.seatType ||
+    passengers.find((p) => p.seatType || p.deck)?.deck ||
+    'Confirmed';
   const duration = ticket.travelTime || '—';
   const report = ticket.reportingTime || '—';
 
@@ -155,6 +165,69 @@ export function BusBoardingPass({ ticket, onBack, onMenu, embedded }: Props) {
           </View>
         </View>
 
+        <View
+          style={[
+            styles.liveBox,
+            !journey.showLiveTrack && styles.liveBoxQuiet,
+            journey.phase === 'completed' && styles.liveBoxDone,
+          ]}
+        >
+          <View style={styles.liveTop}>
+            <View style={styles.liveLeft}>
+              <View
+                style={[
+                  styles.liveDot,
+                  journey.showLiveTrack && journey.tracking && styles.liveDotOn,
+                  journey.phase === 'soon' && styles.liveDotSoon,
+                  journey.phase === 'completed' && styles.liveDotDone,
+                ]}
+              />
+              <Text style={styles.liveTitle} numberOfLines={2}>
+                {journey.statusTitle}
+              </Text>
+            </View>
+            {journey.showLiveTrack && journey.totalKm != null ? (
+              <View style={styles.totalPill}>
+                <Text style={styles.totalPillText}>{journey.totalKm} km trip</Text>
+              </View>
+            ) : null}
+          </View>
+
+          {journey.showLiveTrack ? (
+            <>
+              <View style={styles.kmRow}>
+                <Ionicons name="navigate" size={16} color={Orange} />
+                {journey.kmLeft == null && !journey.error ? (
+                  <ActivityIndicator size="small" color={Orange} />
+                ) : (
+                  <Text style={styles.kmLeftText} numberOfLines={2}>
+                    {journey.error || journey.kmLeftLabel}
+                  </Text>
+                )}
+              </View>
+              <Pressable
+                style={styles.mapsBtn}
+                onPress={() => void journey.openGoogleMapsJourney()}
+              >
+                <Ionicons name="map" size={16} color="#fff" />
+                <Text style={styles.mapsBtnText}>Open Google Maps journey</Text>
+              </Pressable>
+              {ticket.trackingUrl ? (
+                <Pressable
+                  onPress={() => void Linking.openURL(ticket.trackingUrl!)}
+                  style={styles.trackLink}
+                >
+                  <Text style={styles.trackLinkText}>Operator live tracking</Text>
+                </Pressable>
+              ) : null}
+            </>
+          ) : (
+            <Text style={styles.liveBody} numberOfLines={3}>
+              {journey.statusBody}
+            </Text>
+          )}
+        </View>
+
         <View style={styles.notchRow} pointerEvents="none">
           <View style={styles.notch} />
           <View style={styles.notchDash}>
@@ -184,19 +257,55 @@ export function BusBoardingPass({ ticket, onBack, onMenu, embedded }: Props) {
         </View>
 
         <View style={styles.bottomRow}>
-          <View style={styles.passengerCard}>
-            <View style={styles.orangeIcon}>
-              <Ionicons name="person" size={14} color="#fff" />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.label}>PASSENGER</Text>
-              <Text style={styles.passengerName} numberOfLines={1}>
-                {pax?.name || 'Traveller'}
-              </Text>
-              <Text style={styles.statusValue} numberOfLines={1}>
-                Confirmed
-              </Text>
-            </View>
+          <View style={styles.passengerList}>
+            <Text style={styles.label}>
+              PASSENGERS ({passengers.length || 1})
+            </Text>
+            {(passengers.length ? passengers : [{ name: 'Traveller' }]).map(
+              (person, index, list) => {
+                const meta = [
+                  person.age ? `Age ${person.age}` : null,
+                  person.gender
+                    ? String(person.gender).toUpperCase().startsWith('F')
+                      ? 'F'
+                      : String(person.gender).toUpperCase().startsWith('M')
+                        ? 'M'
+                        : person.gender
+                    : null,
+                  person.seat ? `Seat ${person.seat}` : null,
+                  person.seatType || person.deck || null,
+                ]
+                  .filter(Boolean)
+                  .join(' · ');
+                const st = person.status || 'Confirmed';
+                return (
+                  <View
+                    key={`${person.name}-${index}`}
+                    style={[
+                      styles.passengerRow,
+                      index < list.length - 1 && styles.passengerRowBorder,
+                    ]}
+                  >
+                    <View style={styles.orangeIcon}>
+                      <Ionicons name="person" size={12} color="#fff" />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.passengerName} numberOfLines={1}>
+                        {index + 1}. {person.name || `Passenger ${index + 1}`}
+                      </Text>
+                      {meta ? (
+                        <Text style={styles.passengerMeta} numberOfLines={1}>
+                          {meta}
+                        </Text>
+                      ) : null}
+                      <Text style={styles.statusValue} numberOfLines={1}>
+                        {st}
+                      </Text>
+                    </View>
+                  </View>
+                );
+              }
+            )}
           </View>
 
           <View style={styles.qrCard}>
@@ -441,14 +550,22 @@ const styles = StyleSheet.create({
     marginTop: 8,
     alignItems: 'stretch',
   },
-  passengerCard: {
+  passengerList: {
     flex: 1,
-    flexDirection: 'row',
     backgroundColor: 'rgba(248,249,252,0.72)',
     borderRadius: 14,
     padding: 10,
+    gap: 2,
+  },
+  passengerRow: {
+    flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
+    paddingVertical: 6,
+  },
+  passengerRowBorder: {
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#E1E4EA',
   },
   orangeIcon: {
     width: 28,
@@ -463,6 +580,12 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: Navy,
     marginTop: 2,
+  },
+  passengerMeta: {
+    fontFamily: 'Outfit_500Medium',
+    fontSize: 11,
+    color: Label,
+    marginTop: 1,
   },
   statusValue: {
     fontFamily: 'Outfit_700Bold',
@@ -483,5 +606,95 @@ const styles = StyleSheet.create({
     fontFamily: 'Outfit_700Bold',
     fontSize: 10,
     color: Navy,
+  },
+  liveBox: {
+    marginTop: 10,
+    backgroundColor: 'rgba(255,101,0,0.08)',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(255,101,0,0.28)',
+    padding: 12,
+    gap: 8,
+  },
+  liveBoxQuiet: {
+    backgroundColor: 'rgba(7,19,45,0.05)',
+    borderColor: 'rgba(7,19,45,0.12)',
+  },
+  liveBoxDone: {
+    backgroundColor: 'rgba(17,140,58,0.08)',
+    borderColor: 'rgba(17,140,58,0.28)',
+  },
+  liveTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  liveLeft: { flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 },
+  liveDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#9AA3B2',
+  },
+  liveDotOn: { backgroundColor: '#1FC77A' },
+  liveDotSoon: { backgroundColor: Orange },
+  liveDotDone: { backgroundColor: Green },
+  liveTitle: {
+    flex: 1,
+    fontFamily: 'Outfit_700Bold',
+    fontSize: 13,
+    color: Navy,
+  },
+  totalPill: {
+    backgroundColor: Navy,
+    borderRadius: 10,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  totalPillText: {
+    fontFamily: 'DMSans_700Bold',
+    fontSize: 10,
+    color: '#fff',
+  },
+  kmRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  kmLeftText: {
+    flex: 1,
+    fontFamily: 'Outfit_700Bold',
+    fontSize: 15,
+    color: Orange,
+    lineHeight: 20,
+  },
+  liveBody: {
+    fontFamily: 'DMSans_400Regular',
+    fontSize: 12,
+    color: Label,
+    lineHeight: 17,
+  },
+  mapsBtn: {
+    marginTop: 2,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: Orange,
+    borderRadius: 12,
+    paddingVertical: 10,
+  },
+  mapsBtnText: {
+    fontFamily: 'Outfit_700Bold',
+    fontSize: 13,
+    color: '#fff',
+  },
+  trackLink: { alignItems: 'center', paddingTop: 2 },
+  trackLinkText: {
+    fontFamily: 'DMSans_500Medium',
+    fontSize: 12,
+    color: BlueText,
+    textDecorationLine: 'underline',
   },
 });
