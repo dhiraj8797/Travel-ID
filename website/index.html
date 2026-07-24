@@ -3,15 +3,15 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Travel ID — Boarding passes in one wallet</title>
+    <title>Travel ID — Boarding-pass wallet for every journey</title>
     <meta
       name="description"
-      content="Travel ID keeps your bus, train, and flight boarding passes on your phone — with live status while you travel."
+      content="Travel ID keeps bus, train, flight, hotel, and metro boarding passes on your phone — with live status, arrival alerts, and on-device privacy."
     />
     <meta property="og:title" content="Travel ID" />
     <meta
       property="og:description"
-      content="Your boarding-pass wallet for bus, train, and flight."
+      content="Your boarding-pass wallet for bus, train, flight, hotel, and metro."
     />
     <meta property="og:image" content="assets/icon.png" />
     <link rel="icon" href="assets/favicon.png" type="image/png" />
@@ -24,11 +24,18 @@
     <link rel="stylesheet" href="css/styles.css" />
   </head>
   <body>
+    <a class="skip" href="#main">Skip to content</a>
+
     <header class="topbar">
-      <a href="#download">Get the app</a>
+      <nav class="topbar__nav" aria-label="Primary">
+        <a href="#passes">Passes</a>
+        <a href="#features">Features</a>
+        <a href="#how">How it works</a>
+        <a href="#download" class="topbar__cta">Get the app</a>
+      </nav>
     </header>
 
-    <main>
+    <main id="main">
       <section class="hero" aria-label="Travel ID">
         <div class="hero__media" aria-hidden="true">
           <img
@@ -51,40 +58,41 @@
             />
             <p class="brand__name">Travel <span>ID</span></p>
           </div>
-          <h1 class="hero__headline">Boarding passes that stay with you</h1>
+          <h1 class="hero__headline">Every journey. One wallet.</h1>
           <p class="hero__lede">
-            Scan once. Carry bus, train, and flight tickets in one wallet on
-            your phone.
+            Bus, train, flight, hotel, and metro passes on your phone — ready
+            offline at the gate or platform.
           </p>
           <div class="cta-row">
             <a class="btn btn--primary" href="#download">Get Android app</a>
-            <a class="btn btn--ghost" href="#wallet">See how it works</a>
+            <a class="btn btn--ghost" href="#features">Explore features</a>
           </div>
         </div>
       </section>
 
-      <section class="section modes" id="wallet">
+      <section class="section modes" id="passes">
         <div class="section__inner">
-          <h2 class="section__title reveal">One wallet for every journey</h2>
+          <h2 class="section__title reveal">Five pass types. One app.</h2>
           <p class="section__copy reveal">
-            Add a ticket from a QR code, PDF, or photo. Travel ID builds a clean
-            boarding pass you can open offline at the gate or platform.
+            The same options you see in Travel ID — add a ticket once, open a
+            clean boarding pass whenever you need it.
           </p>
-          <div class="modes__grid">
+          <div class="modes__grid modes__grid--five">
             <article class="mode reveal">
               <div class="mode__visual">
-                <img src="assets/bus.jpg" alt="Bus journey" width="800" height="1000" loading="lazy" />
+                <img src="assets/bus.jpg" alt="" width="800" height="1000" loading="lazy" />
               </div>
               <h3 class="mode__label">Bus</h3>
               <p class="mode__text">
-                Keep coach and seat handy for long routes across India.
+                Coach and seat for long routes — open your pass without hunting
+                through WhatsApp or email.
               </p>
             </article>
             <article class="mode reveal">
               <div class="mode__visual mode__visual--vehicle">
                 <img
                   src="assets/hero-train.png"
-                  alt="Train"
+                  alt=""
                   width="640"
                   height="400"
                   loading="lazy"
@@ -92,14 +100,15 @@
               </div>
               <h3 class="mode__label">Train</h3>
               <p class="mode__text">
-                PNR, coach, and berth in a pass you can open without signal.
+                PNR, coach, berth, live running status, coach map, and GPS
+                speed while you travel.
               </p>
             </article>
             <article class="mode reveal">
               <div class="mode__visual">
                 <img
                   src="assets/flight-pass-hero.jpg"
-                  alt="Airport departure"
+                  alt=""
                   width="800"
                   height="1000"
                   loading="lazy"
@@ -107,9 +116,193 @@
               </div>
               <h3 class="mode__label">Flight</h3>
               <p class="mode__text">
-                Boarding barcodes ready when you reach security.
+                Boarding barcodes and live flight status so you know what’s next
+                before you reach security.
               </p>
             </article>
+            <article class="mode reveal">
+              <div class="mode__visual">
+                <img
+                  src="assets/hotel-pass-hero.jpg"
+                  alt=""
+                  width="800"
+                  height="1000"
+                  loading="lazy"
+                />
+              </div>
+              <h3 class="mode__label">Hotel</h3>
+              <p class="mode__text">
+                Stay details from booking PDFs or photos — add or edit your room
+                number after check-in.
+              </p>
+            </article>
+            <article class="mode reveal">
+              <div class="mode__visual mode__visual--metro">
+                <img
+                  src="assets/wallet-bg.jpg"
+                  alt=""
+                  width="800"
+                  height="1000"
+                  loading="lazy"
+                />
+                <span class="mode__chip">Metro</span>
+              </div>
+              <h3 class="mode__label">Metro</h3>
+              <p class="mode__text">
+                India city metros by GPS — pick From / To, keep official gate QR
+                ready, get arrival alerts.
+              </p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="section how" id="how">
+        <div class="section__inner">
+          <h2 class="section__title reveal">Add a ticket in seconds</h2>
+          <p class="section__copy reveal">
+            Same flow as in the app. No typing every field by hand.
+          </p>
+          <ol class="steps">
+            <li class="steps__item reveal">
+              <span class="steps__num" aria-hidden="true">1</span>
+              <div>
+                <h3 class="steps__title">Scan a QR or barcode</h3>
+                <p class="steps__text">
+                  Point the camera at your ticket code — Travel ID builds the
+                  boarding pass.
+                </p>
+              </div>
+            </li>
+            <li class="steps__item reveal">
+              <span class="steps__num" aria-hidden="true">2</span>
+              <div>
+                <h3 class="steps__title">Upload PDF or photo</h3>
+                <p class="steps__text">
+                  Drop an IRCTC, airline, bus, or hotel booking file. We read
+                  the details for you.
+                </p>
+              </div>
+            </li>
+            <li class="steps__item reveal">
+              <span class="steps__num" aria-hidden="true">3</span>
+              <div>
+                <h3 class="steps__title">Review &amp; save</h3>
+                <p class="steps__text">
+                  Confirm the pass, then open it offline at the gate, platform,
+                  or hotel desk.
+                </p>
+              </div>
+            </li>
+          </ol>
+        </div>
+      </section>
+
+      <section class="section features" id="features">
+        <div class="section__inner">
+          <h2 class="section__title reveal">Everything in the app</h2>
+          <p class="section__copy reveal">
+            Every option on Home, Passes, Add, and Profile — listed here so you
+            know what you’re getting.
+          </p>
+
+          <div class="feature-groups">
+            <div class="feature-group reveal">
+              <h3 class="feature-group__title">Wallet &amp; home</h3>
+              <ul class="feature-list">
+                <li>
+                  <strong>Home wallet</strong>
+                  — Recent passes, category filters (All / Bus / Train / Flight /
+                  Hotel / Metro).
+                </li>
+                <li>
+                  <strong>Passes tab</strong>
+                  — Full list of saved boarding passes, open any time.
+                </li>
+                <li>
+                  <strong>Add location</strong>
+                  — Optional home location chip for local context.
+                </li>
+                <li>
+                  <strong>Yearly travel expense</strong>
+                  — Quick view of spend from tickets you’ve saved.
+                </li>
+              </ul>
+            </div>
+
+            <div class="feature-group reveal">
+              <h3 class="feature-group__title">Live while you travel</h3>
+              <ul class="feature-list">
+                <li>
+                  <strong>Live train status</strong>
+                  — Running status, delay, and ETA without leaving the pass.
+                </li>
+                <li>
+                  <strong>Coach map</strong>
+                  — See where your coach sits on the train.
+                </li>
+                <li>
+                  <strong>GPS speed meter</strong>
+                  — On-the-go speed while you’re moving.
+                </li>
+                <li>
+                  <strong>Live flight status</strong>
+                  — Gate-side updates for your flight.
+                </li>
+                <li>
+                  <strong>Arrival alarm</strong>
+                  — Reminder ~20 minutes before your station so you don’t miss
+                  the stop.
+                </li>
+                <li>
+                  <strong>Night headlamps</strong>
+                  — Bus and train scenes light up after sunset (IST).
+                </li>
+              </ul>
+            </div>
+
+            <div class="feature-group reveal">
+              <h3 class="feature-group__title">Metro (India)</h3>
+              <ul class="feature-list">
+                <li>
+                  <strong>City by GPS</strong>
+                  — Auto-detect Delhi, Mumbai, Bengaluru, Hyderabad, Chennai,
+                  Kolkata, Pune, Ahmedabad, Kochi, Lucknow, Jaipur, Nagpur, and
+                  more.
+                </li>
+                <li>
+                  <strong>Station pickers</strong>
+                  — Choose From and To on your city’s network.
+                </li>
+                <li>
+                  <strong>Official gate QR</strong>
+                  — Keep WhatsApp / Namma-style metro QR ready for entry.
+                </li>
+              </ul>
+            </div>
+
+            <div class="feature-group reveal">
+              <h3 class="feature-group__title">Account &amp; privacy</h3>
+              <ul class="feature-list">
+                <li>
+                  <strong>Google or email sign-in</strong>
+                  — Keep your wallet tied to your account on this device.
+                </li>
+                <li>
+                  <strong>Encrypted vault</strong>
+                  — Passes stored on-device with AES-256-GCM; not synced to our
+                  servers.
+                </li>
+                <li>
+                  <strong>Screenshot block</strong>
+                  — Boarding barcodes and metro gate QRs stay off screenshots.
+                </li>
+                <li>
+                  <strong>Profile &amp; settings</strong>
+                  — Reminders, cache clear, delete passes, sign out, legal docs.
+                </li>
+              </ul>
+            </div>
           </div>
         </div>
       </section>
@@ -126,11 +319,12 @@
             />
           </div>
           <div class="live__copy reveal">
-            <h2 class="section__title">Live while you travel</h2>
+            <h2 class="section__title">Stay ahead of the journey</h2>
             <p class="section__copy">
-              See running status on rail journeys and gate-side details for
-              flights — so you know what’s next without leaving the wallet.
+              Live rail and flight updates, arrival alerts, and offline passes
+              mean you spend less time switching apps and more time moving.
             </p>
+            <a class="text-link" href="#download">Download and try it →</a>
           </div>
         </div>
       </section>
@@ -139,8 +333,8 @@
         <div class="section__inner reveal">
           <h2 class="section__title">Get Travel ID</h2>
           <p class="section__copy">
-            Android APK for Travel ID. Install, scan a ticket, and you’re ready
-            for the next departure.
+            Android APK for Travel ID. Install, sign in, add your next ticket,
+            and you’re ready for departure.
           </p>
           <div class="cta-row">
             <a
@@ -150,11 +344,17 @@
             >
               Download APK
             </a>
-            <a class="btn btn--ghost" href="privacy.html">Privacy</a>
+            <a class="btn btn--ghost" href="privacy.html">Privacy policy</a>
           </div>
           <p class="download__note">
-            Package <code>com.travelid.app</code> · Sign in with Google or email
+            Package <code>com.travelid.app</code> · Google or email sign-in ·
+            Works offline for saved passes
           </p>
+          <ul class="download__checklist" aria-label="What you get">
+            <li>Bus · Train · Flight · Hotel · Metro</li>
+            <li>Scan QR · PDF · Photo upload</li>
+            <li>Live status · Arrival alarm · Encrypted vault</li>
+          </ul>
         </div>
       </section>
     </main>
@@ -165,11 +365,14 @@
           <img src="assets/travel-id-logo.png" alt="" width="28" height="28" />
           Travel <span>ID</span>
         </div>
-        <nav class="footer__links" aria-label="Legal">
+        <nav class="footer__links" aria-label="Site">
+          <a href="#passes">Passes</a>
+          <a href="#features">Features</a>
+          <a href="#how">How it works</a>
+          <a href="#download">Download</a>
           <a href="privacy.html">Privacy</a>
           <a href="terms.html">Terms</a>
           <a href="data-privacy.html">Data &amp; privacy</a>
-          <a href="#download">Download</a>
         </nav>
         <p class="footer__copy">
           © 2026 Travel ID. A boarding-pass wallet — not a ticket issuer.
