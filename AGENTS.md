@@ -37,7 +37,9 @@ Not lazy about: understanding the problem (read it fully and trace the real flow
 
 ## Cursor Cloud specific instructions
 
-This repo is an Expo SDK 57 React Native app ("Travel ID", a wallet for bus/rail/flight tickets) plus an optional pure-Node API proxy in `server/`. Dependencies are installed by the startup update script (`npm install --legacy-peer-deps`, which also runs `patch-package` via `postinstall`).
+This repo is an Expo SDK 57 React Native app ("Travel ID", a wallet for bus/rail/flight tickets) plus an optional pure-Node API proxy in `server/`.
+
+**VM startup:** `.cursor/environment.json` sets a no-op install script (`true`) — Cloud Agents do **not** auto-run `npm install` when the machine boots. Run `npm install --legacy-peer-deps` yourself when dependencies are missing or stale.
 
 ### Running services (headless VM)
 - App (web): `npx expo start --web --port 8081` (Metro bundler). Run/scripts are in `package.json`. Standard commands (`start`, `web`, `proxy`) live there.
