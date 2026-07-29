@@ -27,6 +27,7 @@ import {
   isPlaceholderHotelValue,
 } from '../../parsers/hotelDetect';
 import { googleMapsSearchUrl } from '../../services/mapsGeocode';
+import { useSecureScreen } from '../../hooks/useSecureScreen';
 
 const Orange = '#FF6500';
 const OrangeDeep = '#E65100';

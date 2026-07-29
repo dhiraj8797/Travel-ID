@@ -34,6 +34,7 @@ import {
   toJourneyDateIso,
 } from '../../services/railRadar';
 import { SpeedMeter } from './SpeedMeter';
+import { SpeedMusicPrompt } from './SpeedMusicPrompt';
 import { CoachCompositionSheet } from './CoachCompositionSheet';
 import { parseCoachPosition } from '../../utils/coachComposition';
 import { useGpsSpeed } from '../../hooks/useGpsSpeed';
@@ -90,6 +91,8 @@ export function WhereIsMyTrainView({
 }: Props) {
   const insets = useSafeAreaInsets();
   const [coachOpen, setCoachOpen] = useState(false);
+  const [musicPromptOpen, setMusicPromptOpen] = useState(false);
+  const musicOfferedRef = useRef(false);
   const {
     live,
     times,
@@ -112,6 +115,18 @@ export function WhereIsMyTrainView({
   });
   const showLiveDetails = Boolean(summary?.showLiveDetails);
   const gps = useGpsSpeed(showLiveDetails);
+
+  useEffect(() => {
+    if (!showLiveDetails) {
+      musicOfferedRef.current = false;
+      setMusicPromptOpen(false);
+      return;
+    }
+    if (gps.speedKmh > 100 && !musicOfferedRef.current) {
+      musicOfferedRef.current = true;
+      setMusicPromptOpen(true);
+    }
+  }, [showLiveDetails, gps.speedKmh]);
 
   const {
     details,
@@ -344,6 +359,12 @@ export function WhereIsMyTrainView({
         trainName={titleName}
         highlightCoach={coach}
         highlightSeat={seat}
+      />
+
+      <SpeedMusicPrompt
+        visible={musicPromptOpen}
+        speedKmh={gps.speedKmh}
+        onClose={() => setMusicPromptOpen(false)}
       />
 
       <ScrollView

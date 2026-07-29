@@ -3,6 +3,12 @@ import { proxyFetch } from './apiProxy';
 
 export type LatLng = { lat: number; lng: number };
 
+export type PlaceLabel = {
+  label: string;
+  area?: string | null;
+  city?: string | null;
+};
+
 const cache = new Map<string, LatLng>();
 
 /** Forward geocode via proxy (Google Maps API key on server only). */
@@ -43,11 +49,11 @@ export async function geocodeAddress(query: string): Promise<LatLng | null> {
   }
 }
 
-/** Reverse geocode label via proxy; falls back to expo-location. */
-export async function reverseGeocodeLabel(
+/** Reverse geocode place (area + city) via proxy; falls back to expo-location. */
+export async function reverseGeocodePlace(
   lat: number,
   lng: number
-): Promise<string | null> {
+): Promise<PlaceLabel | null> {
   try {
     const qs = new URLSearchParams({
       lat: String(lat),
@@ -59,30 +65,50 @@ export async function reverseGeocodeLabel(
     const json = (await res.json()) as {
       success?: boolean;
       label?: string | null;
+      area?: string | null;
+      city?: string | null;
       formattedAddress?: string | null;
     };
     if (json.success) {
-      return json.label || json.formattedAddress || null;
+      const label = json.label || json.formattedAddress;
+      if (label) {
+        return {
+          label,
+          area: json.area || null,
+          city: json.city || null,
+        };
+      }
     }
   } catch {
     /* fall through */
   }
 
   try {
-    const places = await Location.reverseGeocodeAsync({ latitude: lat, longitude: lng });
+    const places = await Location.reverseGeocodeAsync({
+      latitude: lat,
+      longitude: lng,
+    });
     const p = places[0];
     if (!p) return null;
-    return (
-      p.city ||
-      p.subregion ||
-      p.district ||
-      p.region ||
-      p.name ||
-      null
-    );
+    const area = p.district || p.name || p.street || null;
+    const city = p.city || p.subregion || p.region || null;
+    const label =
+      area && city && area !== city
+        ? `${area}, ${city}`
+        : city || area || null;
+    return label ? { label, area, city } : null;
   } catch {
     return null;
   }
+}
+
+/** Reverse geocode label via proxy; falls back to expo-location. */
+export async function reverseGeocodeLabel(
+  lat: number,
+  lng: number
+): Promise<string | null> {
+  const place = await reverseGeocodePlace(lat, lng);
+  return place?.label || null;
 }
 
 /** Google Maps deep link — no API key in the app. */

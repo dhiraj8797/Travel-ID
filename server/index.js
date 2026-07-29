@@ -1094,17 +1094,26 @@ async function proxyGoogleReverseGeocode(lat, lng) {
     const comps = first.address_components || [];
     const pick = (type) =>
       comps.find((c) => c.types?.includes(type))?.long_name || null;
-    const label =
+    const neighborhood =
+      pick('neighborhood') ||
+      pick('sublocality_level_1') ||
+      pick('sublocality') ||
+      pick('premise');
+    const city =
       pick('locality') ||
       pick('administrative_area_level_2') ||
-      pick('administrative_area_level_1') ||
-      first.formatted_address ||
-      null;
+      pick('administrative_area_level_1');
+    const label =
+      neighborhood && city && neighborhood !== city
+        ? `${neighborhood}, ${city}`
+        : neighborhood || city || first.formatted_address || null;
     return {
       status: 200,
       body: {
         success: true,
         label,
+        area: neighborhood,
+        city,
         formattedAddress: first.formatted_address || null,
       },
     };
