@@ -43,7 +43,7 @@ This repo is an Expo SDK 57 React Native app ("Travel ID", a wallet for bus/rail
 
 ### Running services (headless VM)
 - App (web): `npx expo start --web --port 8081` (Metro bundler). Run/scripts are in `package.json`. Standard commands (`start`, `web`, `proxy`) live there.
-- API proxy: `npm run proxy` → listens on `http://0.0.0.0:8787`. It runs fine with no secrets (endpoints degrade gracefully / return 503). Live rail/flight/OCR/Gemini data needs keys in `server/.env` (see `server/.env.example`); those are never required just to boot.
+- API proxy: `npm run proxy` → listens on `http://0.0.0.0:8787`. It runs fine with no secrets (endpoints degrade gracefully / return 503). Live rail/flight/OCR/Gemini data needs keys in `server/.env` (see `server/.env.example`); those are never required just to boot. **Maps geocoding** uses `GOOGLE_MAPS_API_KEY` on the proxy only (never in the APK).
 
 ### Non-obvious caveats
 - Web needs `react-dom` + `react-native-web` (now in `package.json`). Without them `expo start --web` errors out asking you to install them.
