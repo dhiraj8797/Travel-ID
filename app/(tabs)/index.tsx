@@ -297,6 +297,9 @@ export default function HomeScreen() {
             />
           )}
 
+          {/* Space for animated travel backdrop art */}
+          <View style={{ height: 100 }} />
+
           <View style={styles.search}>
             <Ionicons name="search" size={20} color={colors.muted} />
             <TextInput
