@@ -26,7 +26,7 @@ import {
   ROOM_PENDING,
   isPlaceholderHotelValue,
 } from '../../parsers/hotelDetect';
-import { useSecureScreen } from '../../hooks/useSecureScreen';
+import { googleMapsSearchUrl } from '../../services/mapsGeocode';
 
 const Orange = '#FF6500';
 const OrangeDeep = '#E65100';
@@ -191,7 +191,7 @@ export function HotelBoardingPass({ ticket, onBack, onMenu, embedded }: Props) {
   const mapsUrl = useMemo(() => {
     const q = address || [hotelName, city].filter(Boolean).join(', ');
     if (!q) return null;
-    return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}`;
+    return googleMapsSearchUrl(q);
   }, [address, hotelName, city]);
 
   const openMaps = () => {
