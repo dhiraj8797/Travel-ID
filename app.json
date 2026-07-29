@@ -14,7 +14,7 @@
       "infoPlist": {
         "NSCameraUsageDescription": "Scan ticket QR codes and barcodes, or photograph tickets for Travel ID.",
         "NSPhotoLibraryUsageDescription": "Choose ticket PDFs or photos from your library.",
-        "NSLocationWhenInUseUsageDescription": "Travel ID uses GPS for live train speed, bus remaining distance, and offline metro station guidance.",
+        "NSLocationWhenInUseUsageDescription": "Travel ID uses GPS for your current area name, local weather, live train speed, bus remaining distance, and metro guidance.",
       }
     },
     "android": {
@@ -63,7 +63,7 @@
       [
         "expo-location",
         {
-          "locationWhenInUsePermission": "Allow Travel ID to use GPS for live train speed, bus distance, and offline metro guidance."
+          "locationWhenInUsePermission": "Allow Travel ID to use GPS for your current area, weather, live train speed, bus distance, and metro guidance."
         }
       ],
       [
@@ -80,7 +80,8 @@
           "image": "./assets/splash-icon.png"
         }
       ],
-      "@react-native-google-signin/google-signin"
+      "@react-native-google-signin/google-signin",
+      "expo-audio"
     ],
     "extra": {
       "router": {},

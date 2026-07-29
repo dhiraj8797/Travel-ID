@@ -17,12 +17,14 @@ import { useAuth } from '../../src/auth/AuthContext';
 import { promptWalletSignIn } from '../../src/auth/requireWalletAccount';
 import { ActionCard } from '../../src/components/home/ActionCard';
 import { YearlyExpenseCard } from '../../src/components/home/YearlyExpenseCard';
+import { HomeWeatherCard } from '../../src/components/home/HomeWeatherCard';
 import { HomeMenuDrawer } from '../../src/components/HomeMenuDrawer';
 import { RecentPassCard } from '../../src/components/home/RecentPassCard';
 import { AnimatedTravelBackground } from '../../src/components/AnimatedTravelBackground';
 import { useTickets } from '../../src/context/TicketContext';
 import { PassengerNamesSheet } from '../../src/components/PassengerNamesSheet';
 import { useHomeLocation } from '../../src/hooks/useHomeLocation';
+import { useWeather } from '../../src/hooks/useWeather';
 import {
   fetchPnrDetails,
   passengersNeedNames,
@@ -53,6 +55,7 @@ export default function HomeScreen() {
   const [nameDraft, setNameDraft] = useState<ParsedTicketDraft | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const homeLoc = useHomeLocation();
+  const weather = useWeather(homeLoc.coords);
 
   const counts = useMemo(
     () => ({
@@ -225,8 +228,8 @@ export default function HomeScreen() {
                 if (homeLoc.loading) return;
                 if (homeLoc.hasLocation) {
                   Alert.alert(
-                    homeLoc.label || 'Location',
-                    'Update your city from GPS, or remove it from the home screen.',
+                    homeLoc.label || 'Current location',
+                    'Weather uses this GPS area. Refresh to update, or remove it.',
                     [
                       { text: 'Cancel', style: 'cancel' },
                       {
@@ -236,7 +239,11 @@ export default function HomeScreen() {
                       },
                       {
                         text: 'Refresh',
-                        onPress: () => void homeLoc.addOrRefresh(),
+                        onPress: () => {
+                          void homeLoc.addOrRefresh().then(() =>
+                            weather.refresh()
+                          );
+                        },
                       },
                     ]
                   );
@@ -248,7 +255,7 @@ export default function HomeScreen() {
               accessibilityLabel={
                 homeLoc.hasLocation
                   ? `Location ${homeLoc.label}`
-                  : 'Add location'
+                  : 'Enable location'
               }
             >
               {homeLoc.loading ? (
@@ -267,7 +274,7 @@ export default function HomeScreen() {
                     ? homeLoc.label
                     : homeLoc.error
                       ? 'Retry location'
-                      : 'Add location'}
+                      : 'Enable location'}
               </Text>
               {!homeLoc.loading && !homeLoc.hasLocation ? (
                 <Ionicons name="add" size={14} color={colors.orange} />
@@ -277,6 +284,21 @@ export default function HomeScreen() {
               All your travel passes,{'\n'}in one secure wallet.
             </Text>
           </View>
+
+          {(homeLoc.hasLocation || weather.loading || weather.weather) && (
+            <HomeWeatherCard
+              weather={weather.weather}
+              loading={weather.loading || homeLoc.loading}
+              error={weather.error}
+              placeLabel={homeLoc.label}
+              onPress={() => {
+                void homeLoc.addOrRefresh().then(() => weather.refresh());
+              }}
+            />
+          )}
+
+          {/* Space for animated travel backdrop art */}
+          <View style={{ height: 100 }} />
 
           <View style={styles.search}>
             <Ionicons name="search" size={20} color={colors.muted} />
@@ -597,7 +619,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: 12,
     marginTop: 10,
-    marginBottom: 120,
+    marginBottom: 8,
   },
   locationChip: {
     flexShrink: 1,

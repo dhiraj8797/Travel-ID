@@ -34,9 +34,11 @@ import {
   toJourneyDateIso,
 } from '../../services/railRadar';
 import { SpeedMeter } from './SpeedMeter';
+import { SpeedMusicPrompt } from './SpeedMusicPrompt';
 import { CoachCompositionSheet } from './CoachCompositionSheet';
 import { parseCoachPosition } from '../../utils/coachComposition';
 import { useGpsSpeed } from '../../hooks/useGpsSpeed';
+import { googleMapsSearchUrl } from '../../services/mapsGeocode';
 
 const BG = '#07111F';
 const CARD = '#0C1729';
@@ -89,6 +91,8 @@ export function WhereIsMyTrainView({
 }: Props) {
   const insets = useSafeAreaInsets();
   const [coachOpen, setCoachOpen] = useState(false);
+  const [musicPromptOpen, setMusicPromptOpen] = useState(false);
+  const musicOfferedRef = useRef(false);
   const {
     live,
     times,
@@ -111,6 +115,18 @@ export function WhereIsMyTrainView({
   });
   const showLiveDetails = Boolean(summary?.showLiveDetails);
   const gps = useGpsSpeed(showLiveDetails);
+
+  useEffect(() => {
+    if (!showLiveDetails) {
+      musicOfferedRef.current = false;
+      setMusicPromptOpen(false);
+      return;
+    }
+    if (gps.speedKmh > 100 && !musicOfferedRef.current) {
+      musicOfferedRef.current = true;
+      setMusicPromptOpen(true);
+    }
+  }, [showLiveDetails, gps.speedKmh]);
 
   const {
     details,
@@ -343,6 +359,12 @@ export function WhereIsMyTrainView({
         trainName={titleName}
         highlightCoach={coach}
         highlightSeat={seat}
+      />
+
+      <SpeedMusicPrompt
+        visible={musicPromptOpen}
+        speedKmh={gps.speedKmh}
+        onClose={() => setMusicPromptOpen(false)}
       />
 
       <ScrollView
@@ -1413,9 +1435,9 @@ function clamp(n: number, min: number, max: number) {
 }
 
 async function openMaps(stop: RailRadarStop) {
-  const q = encodeURIComponent(`${stop.stationName} railway station ${stop.stationCode}`);
+  const q = `${stop.stationName} railway station ${stop.stationCode}`;
   try {
-    await Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${q}`);
+    await Linking.openURL(googleMapsSearchUrl(q));
   } catch {
     Alert.alert('Maps', 'Could not open Google Maps.');
   }

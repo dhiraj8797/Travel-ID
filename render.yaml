@@ -21,3 +21,5 @@ services:
         sync: false
       - key: APP_PROXY_TOKEN
         sync: false
+      - key: GOOGLE_MAPS_API_KEY
+        sync: false
