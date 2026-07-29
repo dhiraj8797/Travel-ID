@@ -8,7 +8,8 @@
  *   GET  /cirium/flight-status → Cirium FlightStats Flex (preferred)
  *   POST /ocr        → Baidu Unlimited-OCR (optional GPU server)
  *   POST /hotel-booking/extract → Gemini structured hotel JSON
- *   POST /travel-id/claim
+ *   GET  /maps/geocode          → Google Geocoding (address → lat/lng)
+ *   GET  /maps/reverse-geocode  → Google Geocoding (lat/lng → label)
  *
  * Configure secrets in server/.env (never commit that file).
  */
@@ -44,6 +45,7 @@ const CIRIUM_BASE_URL = (
   .trim()
   .replace(/\/+$/, '');
 const APP_TOKEN = (process.env.APP_PROXY_TOKEN || '').trim();
+const GOOGLE_MAPS_API_KEY = (process.env.GOOGLE_MAPS_API_KEY || '').trim();
 const TRAVEL_ID_DB = join(__dirname, 'data', 'travel-ids.json');
 
 function isCiriumSkyHost(base) {
@@ -979,6 +981,147 @@ async function extractHotelBookingWithGemini(body) {
   }
 }
 
+/** Google Geocoding API — key stays on proxy only. */
+async function proxyGoogleGeocode(address) {
+  if (!GOOGLE_MAPS_API_KEY) {
+    return {
+      status: 503,
+      body: {
+        success: false,
+        error: { message: 'GOOGLE_MAPS_API_KEY not configured on proxy' },
+      },
+    };
+  }
+  const q = String(address || '').trim();
+  if (!q || q.length > 500) {
+    return {
+      status: 400,
+      body: { success: false, error: { message: 'address required (max 500 chars)' } },
+    };
+  }
+  try {
+    const params = new URLSearchParams({ address: q, key: GOOGLE_MAPS_API_KEY });
+    const res = await fetch(
+      `https://maps.googleapis.com/maps/api/geocode/json?${params.toString()}`
+    );
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || json.status === 'REQUEST_DENIED' || json.status === 'INVALID_REQUEST') {
+      return {
+        status: res.status >= 400 ? res.status : 502,
+        body: {
+          success: false,
+          error: {
+            message: json.error_message || json.status || 'Geocoding failed',
+          },
+        },
+      };
+    }
+    const first = json.results?.[0];
+    const loc = first?.geometry?.location;
+    if (!first || typeof loc?.lat !== 'number' || typeof loc?.lng !== 'number') {
+      return {
+        status: 404,
+        body: { success: false, error: { message: 'No results for address' } },
+      };
+    }
+    return {
+      status: 200,
+      body: {
+        success: true,
+        lat: loc.lat,
+        lng: loc.lng,
+        formattedAddress: first.formatted_address || null,
+      },
+    };
+  } catch (e) {
+    return {
+      status: 502,
+      body: {
+        success: false,
+        error: {
+          message: e instanceof Error ? e.message : 'Geocoding upstream failed',
+        },
+      },
+    };
+  }
+}
+
+async function proxyGoogleReverseGeocode(lat, lng) {
+  if (!GOOGLE_MAPS_API_KEY) {
+    return {
+      status: 503,
+      body: {
+        success: false,
+        error: { message: 'GOOGLE_MAPS_API_KEY not configured on proxy' },
+      },
+    };
+  }
+  const latN = Number(lat);
+  const lngN = Number(lng);
+  if (!Number.isFinite(latN) || !Number.isFinite(lngN)) {
+    return {
+      status: 400,
+      body: { success: false, error: { message: 'lat and lng required' } },
+    };
+  }
+  try {
+    const params = new URLSearchParams({
+      latlng: `${latN},${lngN}`,
+      key: GOOGLE_MAPS_API_KEY,
+    });
+    const res = await fetch(
+      `https://maps.googleapis.com/maps/api/geocode/json?${params.toString()}`
+    );
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || json.status === 'REQUEST_DENIED' || json.status === 'INVALID_REQUEST') {
+      return {
+        status: res.status >= 400 ? res.status : 502,
+        body: {
+          success: false,
+          error: {
+            message: json.error_message || json.status || 'Reverse geocoding failed',
+          },
+        },
+      };
+    }
+    const first = json.results?.[0];
+    if (!first) {
+      return {
+        status: 404,
+        body: { success: false, error: { message: 'No results for coordinates' } },
+      };
+    }
+    const comps = first.address_components || [];
+    const pick = (type) =>
+      comps.find((c) => c.types?.includes(type))?.long_name || null;
+    const label =
+      pick('locality') ||
+      pick('administrative_area_level_2') ||
+      pick('administrative_area_level_1') ||
+      first.formatted_address ||
+      null;
+    return {
+      status: 200,
+      body: {
+        success: true,
+        label,
+        formattedAddress: first.formatted_address || null,
+      },
+    };
+  } catch (e) {
+    return {
+      status: 502,
+      body: {
+        success: false,
+        error: {
+          message:
+            e instanceof Error ? e.message : 'Reverse geocoding upstream failed',
+        },
+      },
+    };
+  }
+}
+
 const server = http.createServer(async (req, res) => {
   try {
     if (req.method === 'OPTIONS') {
@@ -1006,6 +1149,7 @@ const server = http.createServer(async (req, res) => {
         activeFlightKey: flightKeys.length ? activeFlightKey + 1 : 0,
         unlimitedOcr: Boolean(UNLIMITED_OCR_URL),
         gemini: Boolean((process.env.GEMINI_API_KEY || '').trim()),
+        googleMaps: Boolean(GOOGLE_MAPS_API_KEY),
       });
       return;
     }
@@ -1055,6 +1199,25 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (url.pathname === '/maps/geocode' || url.pathname === '/v1/maps/geocode') {
+      const address = url.searchParams.get('address') || '';
+      const { status, body } = await proxyGoogleGeocode(address);
+      sendJson(res, status, body);
+      return;
+    }
+
+    if (
+      url.pathname === '/maps/reverse-geocode' ||
+      url.pathname === '/v1/maps/reverse-geocode'
+    ) {
+      const { status, body } = await proxyGoogleReverseGeocode(
+        url.searchParams.get('lat'),
+        url.searchParams.get('lng')
+      );
+      sendJson(res, status, body);
+      return;
+    }
+
     if (
       url.pathname === '/cirium/flight-status' ||
       url.pathname === '/v1/cirium/flight-status'
@@ -1096,7 +1259,7 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log(
     `  Rail keys: ${railKeys.length}/6 · Flight keys: ${flightKeys.length}/6 · Cirium: ${
       CIRIUM_SECRET ? `yes (${CIRIUM_BASE_URL})` : 'no'
-    }`
+    } · Google Maps: ${GOOGLE_MAPS_API_KEY ? 'yes' : 'no'}`
   );
   if (process.env.NODE_ENV === 'production' && !APP_TOKEN) {
     console.warn('  WARNING: APP_PROXY_TOKEN missing — proxy will reject requests');

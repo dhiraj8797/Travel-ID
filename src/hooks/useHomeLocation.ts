@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as Location from 'expo-location';
 import { locateMetroCity } from '../metro';
+import { reverseGeocodeLabel } from '../services/mapsGeocode';
 
 const STORAGE_KEY = 'travelid.home.locationLabel.v1';
 
@@ -19,22 +20,9 @@ async function labelFromCoords(lat: number, lng: number): Promise<string> {
   const metro = locateMetroCity(lat, lng);
   if (metro) return metro.city;
 
-  try {
-    const places = await Location.reverseGeocodeAsync({ latitude: lat, longitude: lng });
-    const p = places[0];
-    if (p) {
-      const city =
-        p.city ||
-        p.subregion ||
-        p.district ||
-        p.region ||
-        p.name ||
-        null;
-      if (city) return city;
-    }
-  } catch {
-    /* fall through */
-  }
+  const fromMaps = await reverseGeocodeLabel(lat, lng);
+  if (fromMaps) return fromMaps;
+
   return `${lat.toFixed(2)}°, ${lng.toFixed(2)}°`;
 }
 

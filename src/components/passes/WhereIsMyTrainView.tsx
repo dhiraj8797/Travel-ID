@@ -37,6 +37,7 @@ import { SpeedMeter } from './SpeedMeter';
 import { CoachCompositionSheet } from './CoachCompositionSheet';
 import { parseCoachPosition } from '../../utils/coachComposition';
 import { useGpsSpeed } from '../../hooks/useGpsSpeed';
+import { googleMapsSearchUrl } from '../../services/mapsGeocode';
 
 const BG = '#07111F';
 const CARD = '#0C1729';
@@ -1413,9 +1414,9 @@ function clamp(n: number, min: number, max: number) {
 }
 
 async function openMaps(stop: RailRadarStop) {
-  const q = encodeURIComponent(`${stop.stationName} railway station ${stop.stationCode}`);
+  const q = `${stop.stationName} railway station ${stop.stationCode}`;
   try {
-    await Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${q}`);
+    await Linking.openURL(googleMapsSearchUrl(q));
   } catch {
     Alert.alert('Maps', 'Could not open Google Maps.');
   }

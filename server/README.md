@@ -141,3 +141,23 @@ UNLIMITED_OCR_URL=http://127.0.0.1:10000
 
 3. App upload flow: photo/PDF → `POST /ocr` on the proxy → Unlimited-OCR →
    hotel/train/bus/flight parsers. If OCR server is down, ML Kit is used.
+
+## Google Maps (Geocoding — server-only)
+
+The app never embeds your Google Maps API key. Geocoding runs on the proxy:
+
+- `GET /maps/geocode?address=...` → `{ lat, lng, formattedAddress }`
+- `GET /maps/reverse-geocode?lat=...&lng=...` → `{ label, formattedAddress }`
+
+Set in `server/.env` (or Railway):
+
+```bash
+GOOGLE_MAPS_API_KEY=your_key
+```
+
+Enable **Geocoding API** in Google Cloud Console and restrict the key:
+
+- API restriction: Geocoding API only
+- Application restriction: IP addresses of your proxy host (Railway/Render), not the mobile app
+
+The APK only opens Google Maps via URL (`api=1` links); those do not use this key.

@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Linking } from 'react-native';
 import * as Location from 'expo-location';
+import {
+  geocodeAddress,
+  googleMapsDirectionsUrl,
+  type LatLng,
+} from '../services/mapsGeocode';
 import { Ticket } from '../types/ticket';
 import {
   busPhaseCopy,
@@ -13,7 +18,7 @@ import {
   parseTicketDistanceKm,
 } from '../utils/geo';
 
-export type LatLng = { lat: number; lng: number };
+export type { LatLng };
 
 export type BusJourneyState = {
   phase: LiveJourneyPhase;
@@ -70,16 +75,9 @@ async function geocodePlace(query: string): Promise<LatLng | null> {
   if (!key) return null;
   const hit = geocodeCache.get(key);
   if (hit) return hit;
-  try {
-    const results = await Location.geocodeAsync(query);
-    const first = results[0];
-    if (!first) return null;
-    const point = { lat: first.latitude, lng: first.longitude };
-    geocodeCache.set(key, point);
-    return point;
-  } catch {
-    return null;
-  }
+  const point = await geocodeAddress(query);
+  if (point) geocodeCache.set(key, point);
+  return point;
 }
 
 /**
@@ -250,13 +248,10 @@ export function useBusJourney(ticket: Ticket): BusJourneyState {
   }, [showLiveTrack, requestPermission, ticketTotalKm]);
 
   const openGoogleMapsJourney = useCallback(async () => {
-    const dest = encodeURIComponent(destinationQuery(ticket));
-    const origin = encodeURIComponent(boardingQuery(ticket));
-    const url =
-      `https://www.google.com/maps/dir/?api=1` +
-      `&origin=${origin}` +
-      `&destination=${dest}` +
-      `&travelmode=driving`;
+    const url = googleMapsDirectionsUrl(
+      boardingQuery(ticket),
+      destinationQuery(ticket)
+    );
     await Linking.openURL(url);
   }, [ticket]);
 
